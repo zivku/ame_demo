@@ -1,5 +1,5 @@
-SDK            := /home/user/WorkArea/buildroot_9x60_curiosity-2023.10/buildroot-at91/output/host
-CXX            := $(SDK)/bin/arm-buildroot-linux-gnueabi-g++ -std=c++17
+SDK            := /home/zivku/git/som1_ame_202404/buildroot-mchp/output/host
+CXX            := $(SDK)/bin/arm-buildroot-linux-gnueabihf-g++ -std=c++17
 SRC_DIR        := ../src
 EGT_CXXFLAGS   := $(shell $(SDK)/bin/pkg-config libegt --cflags)
 EGT_LDFLAGS    := $(shell $(SDK)/bin/pkg-config libegt --libs)
@@ -8,7 +8,7 @@ EGT_LDFLAGS    := $(shell $(SDK)/bin/pkg-config libegt --libs)
 LIBS           := -lplanes -ljpeg
 
 SRC            := $(SRC_DIR)/*
-TARGET         := navi
+TARGET         := koli
 
 all: $(TARGET)
 
