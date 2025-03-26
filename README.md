@@ -1,1 +1,0 @@
-# egt_showjpeg
