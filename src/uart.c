@@ -59,7 +59,7 @@ uint8_t* uart_transmit(const char* DEV_PATH, speed_t baudRate, int vtime, uint8_
     
     
 }
-uint8_t* uart_read(const char* DEV_PATH, speed_t baudRate, int vtime, int&received_bytes)
+uint8_t* uart_read(const char* DEV_PATH, speed_t baudRate, int vtime, int expected_bytes, int&received_bytes)
 {
     int fd;
     int ret;
@@ -92,13 +92,12 @@ uint8_t* uart_read(const char* DEV_PATH, speed_t baudRate, int vtime, int&receiv
 
     while ((ret = read(fd, rx_data, BUF_SIZE - 1)) > 0) {
         received_bytes += ret;
+        if (received_bytes == expected_bytes){
+            break;
+        }
     }
     close(fd);
     return rx_data;
-        
-    
-    
-    
     
 }
 int uart_write(const char* DEV_PATH, speed_t baudRate, int vtime, uint8_t tx_data[], int tx_len)

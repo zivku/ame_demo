@@ -23,13 +23,21 @@
 #include <arpa/inet.h>
 #include <cstdio>
 #include <random>
+#include <mutex>
 #include "uart.h"
 #include "sd.h"
 #include "gpio.h"
 #include "math.h"
+
+#define PROJECT_NAME "holystone_ame"
+#define VERSION "v1.2"
+
 const char* WIFI_UART1_PATH = "/dev/ttyS1";
+const char* CONTROL_UART2_PATH = "/dev/ttyS2";
 const std::string sd_device = "/dev/mmcblk0p1";
 const std::string mount_point = "/mnt/sd";
+std::mutex fail_log_mutex;
+std::mutex log_mutex;
 namespace fs = std::filesystem;
 using namespace std;
 using namespace egt;
@@ -45,6 +53,12 @@ std::vector<std::vector<std::string>> ct_current_data_list3 = {
     {"CT19", "CT20", "CT21","CT22","CT23","CT24","CT25","CT26","CT27","CT28","CT29","CT30"},
     {"31.1 A", "31.2 A", "31.3 A", "31.4 A", "31.5 A", "31.6 A", "31.7 A", "31.8 A", "31.9 A", "32.0 A", "32.1 A", "32.2 A"}
 };
+typedef struct {
+    int log_time_delay = 5;           // 日誌延遲時間 (預設值)
+    int log_retention_days = 7;       // 日誌保存天數 (預設值)
+    int network_detection_delay = 1;  // 網絡檢測延遲時間 (預設值)
+    int wifi_batch_size = 30;         // WiFi 批次大小 (預設值)
+} config_t;
 enum class TIMESET_TYPE { DATE, TIME };
 struct DateTime {
     int year;
@@ -54,7 +68,51 @@ struct DateTime {
     int minute;
     int second;
 };
-void printFailedLog(const std::string& fail_log_filename);
+
+typedef struct __attribute__((packed)) {
+    uint8_t power_status : 1;    // Bit 0: 開關機狀態
+    uint8_t action_status : 1;   // Bit 1: 動作中
+    uint8_t learning_mode : 1;   // Bit 2: 學習中
+    uint8_t test_mode : 1;       // Bit 3: 測試模式
+    uint8_t sos_mode : 1;        // Bit 4: SOS 模式
+    uint8_t pause_output : 1;    // Bit 5: 暫停輸出
+    uint8_t error_output : 1;    // Bit 6: 錯誤輸出
+    uint8_t sys_time : 1;        // Bit 7: 系統時間
+} Flag1_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t sw1_setting : 1;     // Bit 0: 設定SW_1
+    uint8_t sw2_setting : 1;     // Bit 1: 設定SW_2
+    uint8_t sw3_setting : 1;     // Bit 2: 設定SW_3
+    uint8_t reserved : 5;        // Bit 3-7: 保留位
+} Flag2_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t reserved[8];         // Bit 0-7: 都是保留位
+} Flag3_t;
+typedef struct __attribute__((packed)) {
+    uint8_t start[2];         // 0x55, 0xAA
+    uint8_t length;           // 資料總長（含 header 以後）
+    uint16_t host_id;         // 主機 ID（Little-endian: 低位在前）
+    uint8_t customer_code;    // 客戶代號
+    uint8_t model_code;       // 機型代號
+    uint8_t signal_mode;      // 信號模式 A0/Bx/Cx
+    uint8_t page_number;      // 資料頁面
+    uint8_t error_code;       // 錯誤碼
+    uint8_t command;          // 命令 Function
+    Flag1_t flag1;            // 解析 data[0]
+    Flag2_t flag2;            // 解析 data[1]
+    Flag3_t flag3;            // 解析 data[2]
+    uint8_t data[25];         // 剩餘資料
+    uint8_t checksum;         // CRC 檢查碼
+} ControlPacket_t;
+
+void print_control_packet(const ControlPacket_t* pkt);
+bool validate_control_packet_checksum(const ControlPacket_t* pkt);
+void read_controlboard_data_thread(void);
+void send_ct_log_towifi_loop(const std::string& fail_log_filename);
+void resned_ct_log_towifi_loop(const std::string& fail_log_filename);
+void resend_wifi_FailedLog(const std::string& fail_log_filename);
 int uartTransmitCurrentToWiFi(int ct_num, float current);
 void copy_csv_to_sd(const std::string& target_dir);
 std::string get_current_date_string(void);

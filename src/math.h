@@ -6,5 +6,5 @@
 #include <stdlib.h>
 std::vector<uint16_t> generate_crc16_table();
 uint16_t calculate_crc16(const uint8_t* data, size_t length, uint16_t crc = 0xFFFF);
-
+uint8_t calculate_simple_checksum(const uint8_t* data, size_t length);
 #endif // CRC16_H

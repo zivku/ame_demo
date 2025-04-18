@@ -1,17 +1,23 @@
 #include "main.h"
-void printFailedLog(const std::string& fail_log_filename) {
-    std::ifstream fail_log_file(fail_log_filename);
+void resend_wifi_FailedLog(const std::string& fail_log_filename) {
+    printf("wait update\n\r");
+    std::lock_guard<std::mutex> lock(fail_log_mutex);
+    printf("wait update2\n\r");
+    std::fstream fail_log_file(fail_log_filename, std::ios::in | std::ios::out | std::ios::app);
     if (!fail_log_file.is_open()) {
         std::cerr << "Failed to open fail log file!" << std::endl;
         return;
     }
-
+    if (fail_log_file.peek() == EOF) {
+        std::cerr << "Fail log file is empty. Exiting function." << std::endl;
+        fail_log_file.close();
+        return;
+    }
     std::string line;
     std::ofstream temp_file("temp_fail_log.csv");
     std::vector<std::string> failed_lines;
     int line_count = 0;
 
-    // 讀取前30筆資料並處理
     while (std::getline(fail_log_file, line) && line_count < 30) {
         std::istringstream line_stream(line);
         std::string timestamp, ct_str, current_str, status;
@@ -60,15 +66,6 @@ void printFailedLog(const std::string& fail_log_filename) {
         line_count++;
     }
 
-    // // 將剩下的資料（第31筆及以後）寫入臨時文件
-    // std::ofstream remaining_file("remaining_fail_log.csv");
-    // while (std::getline(fail_log_file, line)) {
-    //     remaining_file << line << std::endl;
-    // }
-
-    
-    //remaining_file.close();
-
     // 打開臨時文件寫回失敗資料
     for (const auto& failed_line : failed_lines) {
         temp_file << failed_line << std::endl;
@@ -76,13 +73,7 @@ void printFailedLog(const std::string& fail_log_filename) {
     while (std::getline(fail_log_file, line)) {
         temp_file << line << std::endl;
     }
-    // // 寫入剩餘的資料
-    // std::ifstream remaining_file_read("remaining_fail_log.csv");
-    // while (std::getline(remaining_file_read, line)) {
-    //     temp_file << line << std::endl;
-    // }
 
-    //remaining_file_read.close();
     fail_log_file.close();
     temp_file.close();
 
@@ -137,8 +128,10 @@ int uartTransmitCurrentToWiFi(int ct_num, float current){
 void copy_csv_to_sd(const std::string& target_dir) {
     for (const auto& entry : fs::directory_iterator(".")) {
         const auto& path = entry.path();
-        if (path.extension() == ".csv") {
+        std::string filename = path.filename().string();
+        if (path.extension() == ".csv" && filename.rfind("current", 0) == 0) {
             std::string target_file = target_dir + "/" + path.filename().string();
+            std::lock_guard<std::mutex> lock(log_mutex);
             std::ifstream src(path, std::ios::binary);
             std::ofstream dest(target_file, std::ios::binary);
 
@@ -163,8 +156,17 @@ int days_in_month(int year, int month) {
 }
 bool isNetworkAvailable()
 {
-    int result = system("ping -c 1 -W 1 8.8.8.8 > /dev/null 2>&1");   
-    return (result == 0);
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) return false;
+
+    struct sockaddr_in server;
+    server.sin_family = AF_INET;
+    server.sin_port = htons(80);
+    inet_pton(AF_INET, "8.8.8.8", &server.sin_addr);
+
+    bool success = (connect(sock, (struct sockaddr*)&server, sizeof(server)) == 0);
+    close(sock);
+    return success;
 }
 std::string format_date_time(const DateTime& dt) {
     std::ostringstream oss;
@@ -290,7 +292,7 @@ void create_log_file_if_not_exists(const std::string& filename) {
 }
 void log_current_data(const std::string& filename, const std::string& fail_log_filename,const std::vector<std::vector<std::vector<std::string>>>& data_sets, int log_retention_days) {
     manage_log_files("current_data_log_", log_retention_days);
-    
+    std::lock_guard<std::mutex> lock(log_mutex);
     std::ofstream log_file(filename, std::ios::app);
     if (!log_file.is_open()) {
         std::cerr << "open log file error!\n" << std::endl;
@@ -343,6 +345,9 @@ void log_current_data(const std::string& filename, const std::string& fail_log_f
     log_file.close();
     if (!failed_transmissions.empty()) {
         //manage_fail_log_size(fail_log_filename, 10);
+        printf("wait =======================\n\r");
+        std::lock_guard<std::mutex> lock(fail_log_mutex);
+        printf("wait 22222222222222222222222\n\r");
         std::ofstream fail_log_file(fail_log_filename, std::ios::app);
         if (!fail_log_file.is_open()) {
             std::cerr << "Failed to open fail log file!" << std::endl;
@@ -511,6 +516,125 @@ void update_wifi_page(egt::VerticalBoxSizer& main_box, egt::VerticalBoxSizer& wi
 
     main_box.add(expand(scrollview));
 }
+void send_ct_log_towifi_loop(const std::string& fail_log_filename) {
+    while (true) {
+        std::vector<std::vector<std::vector<std::string>>> ct_data_groups = {
+            ct_current_data_list1,
+            ct_current_data_list2,
+            ct_current_data_list3
+        };
+
+        create_log_file_if_not_exists(fail_log_filename);
+        log_current_data("current_data_log_" + get_current_date_string() + ".csv", fail_log_filename, ct_data_groups, 7);
+        sync();
+        
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+    }
+}
+void resned_ct_log_towifi_loop(const std::string& fail_log_filename) {
+    while (true) {
+        
+
+        resend_wifi_FailedLog(fail_log_filename);
+        sync();
+        
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+}
+bool validate_control_packet_checksum(const ControlPacket_t* pkt) {
+    if (pkt == NULL) return false;
+
+    const uint8_t* raw = (const uint8_t*)pkt;
+    size_t len = sizeof(ControlPacket_t) - 1;
+
+    uint8_t calc_sum = calculate_simple_checksum(raw, len);
+    return (calc_sum == pkt->checksum);
+}
+void print_control_packet(const ControlPacket_t* pkt) {
+    if (pkt == NULL) {
+        printf("Invalid packet (NULL pointer)\n");
+        return;
+    }
+
+    printf("ControlPacket: \n");
+    printf("  Start: 0x%02X 0x%02X\n", pkt->start[0], pkt->start[1]);
+    printf("  Length: 0x%02X\n", pkt->length);
+    printf("  Host ID: 0x%04X\n", pkt->host_id);
+    printf("  Customer Code: 0x%02X\n", pkt->customer_code);
+    printf("  Model Code: 0x%02X\n", pkt->model_code);
+    printf("  Signal Mode: 0x%02X\n", pkt->signal_mode);
+    printf("  Page Number: 0x%02X\n", pkt->page_number);
+    printf("  Error Code: 0x%02X\n", pkt->error_code);
+    printf("  Command: 0x%02X\n", pkt->command);
+
+    // 打印 Flag 1
+    printf("  Flag 1:\n");
+    printf("    Power Status: %u\n", pkt->flag1.power_status);
+    printf("    Action Status: %u\n", pkt->flag1.action_status);
+    printf("    Learning Mode: %u\n", pkt->flag1.learning_mode);
+    printf("    Test Mode: %u\n", pkt->flag1.test_mode);
+    printf("    SOS Mode: %u\n", pkt->flag1.sos_mode);
+    printf("    Pause Output: %u\n", pkt->flag1.pause_output);
+    printf("    Error Output: %u\n", pkt->flag1.error_output);
+    printf("    Sys Time: %u\n", pkt->flag1.sys_time);
+
+    // 打印 Flag 2
+    printf("  Flag 2:\n");
+    printf("    SW1 Setting: %u\n", pkt->flag2.sw1_setting);
+    printf("    SW2 Setting: %u\n", pkt->flag2.sw2_setting);
+    printf("    SW3 Setting: %u\n", pkt->flag2.sw3_setting);
+    printf("    Reserved: 0x%02X\n", pkt->flag2.reserved);
+
+    // 打印 Flag 3
+    printf("  Flag 3:\n");
+    for (int i = 0; i < 8; ++i) {
+        printf("    Reserved[%d]: 0x%02X\n", i, pkt->flag3.reserved[i]);
+    }
+
+    // 打印 data 資料
+    printf("  Data: ");
+    for (int i = 0; i < 25; ++i) {
+        printf("0x%02X ", pkt->data[i]);
+    }
+    printf("\n");
+
+    // 打印 Checksum
+    printf("  Checksum: 0x%02X\n", pkt->checksum);
+}
+void read_controlboard_data_thread(){
+    speed_t speed = B115200;
+    int vtime = 0;
+    int received_bytes = 0;
+    int expected_bytes = 40;
+    while(1) {
+        int received_bytes = 0;
+        uint8_t *receive = uart_read(CONTROL_UART2_PATH, speed, vtime, expected_bytes, received_bytes);
+        if (receive != NULL && received_bytes == 40) {
+            ControlPacket_t *pkt = (ControlPacket_t *)receive;
+            if(pkt->start[0] == 0x55 && pkt->start[1] == 0xAA){
+                if (validate_control_packet_checksum(pkt)) {
+                    printf("Checksum valid!\n");
+                    print_control_packet(pkt);
+                    // TODO
+                } else {
+                    printf("Checksum error！\n");
+                    continue;
+                }
+            }
+            else{
+                printf("ControlBoard start data error. Retrying...\n");
+                continue;
+            }
+        }
+        else{
+            printf("Invalid packet size: %d bytes. Skipping...\n", received_bytes);
+            free(receive);
+            continue;
+        }
+        
+        free(receive);
+    }
+}
 int main(int argc, char** argv)
 {
 
@@ -518,21 +642,23 @@ int main(int argc, char** argv)
     const auto screen_size = egt::Application::instance().screen()->size();
     egt::add_search_path("/usr/share/libegt");
     Config config;
-    int log_time_delay = 5;
-    int log_retention_days = 7;
-    int network_detection_delay = 1;
+    config_t cfg;
     if (config.load("config.ini")) {
         std::string log_time_delay_str = config.get("parameter", "log_time_delay");
         std::string log_retention_days_str = config.get("parameter", "log_retention_days");
         std::string network_detection_delay_str = config.get("parameter", "network_detection_delay");
+        std::string wifi_batch_size_str = config.get("parameter", "wifi_batch_size");
         if (!log_time_delay_str.empty()) {
-            log_time_delay = std::stoi(log_time_delay_str);
+            cfg.log_time_delay = std::stoi(log_time_delay_str);
         }
         if (!log_retention_days_str.empty()) {
-            log_retention_days = std::stoi(log_retention_days_str);
+            cfg.log_retention_days = std::stoi(log_retention_days_str);
         }
         if (!network_detection_delay_str.empty()) {
-            network_detection_delay = std::stoi(network_detection_delay_str);
+            cfg.network_detection_delay = std::stoi(network_detection_delay_str);
+        }
+        if (!wifi_batch_size_str.empty()) {
+            cfg.wifi_batch_size = std::stoi(wifi_batch_size_str);
         }
     }
     egt::TopWindow win;
@@ -548,7 +674,7 @@ int main(int argc, char** argv)
     
     VerticalBoxSizer main_box(egt::Justification::start);
     win.add(expand(main_box));
-    egt::PeriodicTimer log_timer{std::chrono::seconds(log_time_delay)};
+    egt::PeriodicTimer log_timer{std::chrono::seconds(cfg.log_time_delay)};
     //========================title box================================
     HorizontalBoxSizer title_main_box(egt::Justification::justify);
     title_main_box.border(2);
@@ -593,7 +719,7 @@ int main(int argc, char** argv)
     netork_warning_button->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent);
     netork_warning_button->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent, egt::Palette::GroupId::active);
 
-    egt::PeriodicTimer network_timer{std::chrono::seconds(network_detection_delay)};
+    egt::PeriodicTimer network_timer{std::chrono::seconds(cfg.network_detection_delay)};
     //========================title box================================
 
     //========================page1 box================================
@@ -1333,7 +1459,6 @@ int main(int argc, char** argv)
     std::string fail_log_filename = "failed_transmissions_log.csv";
     network_timer.on_timeout([&]()
     {
-        
         if (isNetworkAvailable())
         {
             title_right_box.remove_all();
@@ -1370,20 +1495,15 @@ int main(int argc, char** argv)
         else {
             printf("no sd\n\r");
         }
-        std::vector<std::vector<std::vector<std::string>>> ct_data_groups = {
-            ct_current_data_list1,
-            ct_current_data_list2,
-            ct_current_data_list3
-        };
-        create_log_file_if_not_exists(fail_log_filename);
-        log_current_data("current_data_log_" + get_current_date_string() + ".csv", fail_log_filename,ct_data_groups, log_retention_days);
-        printFailedLog(fail_log_filename);
         sync();
     });
     log_timer.start();
     network_timer.start();
-
-
+    
+    std::thread resend_ct_thread(resned_ct_log_towifi_loop, fail_log_filename);
+    resend_ct_thread.detach();
+    std::thread send_ct_thread(send_ct_log_towifi_loop, fail_log_filename);
+    send_ct_thread.detach();
     
     win.show();
 
