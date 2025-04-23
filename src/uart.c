@@ -91,10 +91,12 @@ uint8_t* uart_read(const char* DEV_PATH, speed_t baudRate, int vtime, int expect
     tcsetattr(fd, TCSANOW, &options);
 
     while ((ret = read(fd, rx_data, BUF_SIZE - 1)) > 0) {
+        //printf("============================================================\n\r");
+        //printf("Read %d bytes, total received: %d\n\r", ret, received_bytes + ret);
         received_bytes += ret;
-        // if (received_bytes == expected_bytes){
-        //     break;
-        // }
+        if (received_bytes == expected_bytes){
+            break;
+        }
     }
     close(fd);
     return rx_data;

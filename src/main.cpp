@@ -137,6 +137,7 @@ int copy_csv_to_sd(const std::string& target_dir) {
                 // 找最舊的檔案刪除
                 std::optional<fs::directory_entry> oldest;
                 for (const auto& f : fs::directory_iterator(target_dir)) {
+                    if (f.path().extension() != ".csv") continue;
                     if (!oldest || fs::last_write_time(f) < fs::last_write_time(*oldest)) {
                         oldest = f;
                     }
@@ -556,7 +557,7 @@ void send_ct_log_towifi_loop(const std::string& fail_log_filename, int log_reten
             {
                 perror("send ct data test start\n\r");
                 std::lock_guard<std::mutex> lock(ct_data_mutex);
-                perror("control ct data test end\n\r");
+                perror("send ct data test end\n\r");
                 ct_data_groups = {
                     ct_current_data_list1,
                     ct_current_data_list2,
@@ -589,8 +590,11 @@ bool validate_control_packet_checksum(const ControlPacket_t* pkt) {
 
     const uint8_t* raw = (const uint8_t*)pkt;
     size_t len = sizeof(ControlPacket_t) - 1;
-
+    // for (int i = 0; i < 40; ++i) {
+    //     printf("0x%02X ", raw[i]);
+    // }
     uint8_t calc_sum = calculate_simple_checksum(raw, len);
+    //printf("Calculated checksum: 0x%02X, Packet checksum: 0x%02X\n", calc_sum, pkt->checksum);
     return (calc_sum == pkt->checksum);
 }
 void print_control_packet(const ControlPacket_t* pkt) {
@@ -657,11 +661,11 @@ void read_controlboard_data_thread(){
     int received_bytes = 0;
     int expected_bytes = 40;
     while(1) {
-        
         int received_bytes = 0;
         uint8_t *receive = uart_read(CONTROL_UART2_PATH, speed, vtime, expected_bytes, received_bytes);
         if (receive != NULL && received_bytes == 40) {
             ControlPacket_t *pkt = (ControlPacket_t *)receive;
+            print_control_packet(pkt);
             if(pkt->start == 0xAA55){
                 if (validate_control_packet_checksum(pkt)) {
                     

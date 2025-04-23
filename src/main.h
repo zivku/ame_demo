@@ -140,7 +140,7 @@ typedef struct __attribute__((packed)) {
     uint8_t signal_mode;      // 信號模式 A0/Bx/Cx
     uint8_t page_number;      // 資料頁面
     uint8_t error_code;       // 錯誤碼
-    Command_t command;        // 命令 Function
+    uint8_t command;        // 命令 Function
     uint8_t process_flag; 
     Flag1_t flag1;            // 解析 data[0]
     Flag2_t flag2;            // 解析 data[1]
