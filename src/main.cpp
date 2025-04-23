@@ -123,24 +123,59 @@ int uartTransmitCurrentToWiFi(int ct_num, float current){
         return 1;
     }
 }
-void copy_csv_to_sd(const std::string& target_dir) {
+int copy_csv_to_sd(const std::string& target_dir) {
     for (const auto& entry : fs::directory_iterator(".")) {
         const auto& path = entry.path();
         std::string filename = path.filename().string();
+
         if (path.extension() == ".csv" && filename.rfind("current", 0) == 0) {
-            std::string target_file = target_dir + "/" + path.filename().string();
+            std::string target_file = target_dir + "/" + filename;
+            std::uintmax_t file_size = fs::file_size(path);
+
+            // 嘗試確保空間足夠
+            while (fs::space(target_dir).available < file_size) {
+                // 找最舊的檔案刪除
+                std::optional<fs::directory_entry> oldest;
+                for (const auto& f : fs::directory_iterator(target_dir)) {
+                    if (!oldest || fs::last_write_time(f) < fs::last_write_time(*oldest)) {
+                        oldest = f;
+                    }
+                }
+
+                if (oldest) {
+                    std::error_code ec;
+                    fs::remove(oldest->path(), ec);
+                    if (ec) {
+                        std::cerr << "Failed to delete file: " << oldest->path() << " (" << ec.message() << ")" << std::endl;
+                        return -1;
+                    } else {
+                        std::cout << "Deleted old file to free space: " << oldest->path().filename().string() << std::endl;
+                    }
+                } else {
+                    std::cerr << "No files to delete. Not enough space for: " << filename << std::endl;
+                    return -1;
+                }
+            }
+
+            // 複製檔案
             std::lock_guard<std::mutex> lock(log_mutex);
             std::ifstream src(path, std::ios::binary);
             std::ofstream dest(target_file, std::ios::binary);
 
             if (src && dest) {
                 dest << src.rdbuf();
-                std::cout << "Copy log : " << path.filename().string() << std::endl;
+                if (dest.fail()) {
+                    std::cerr << "Write failed (disk may be full): " << filename << std::endl;
+                    return -1;
+                }
+                std::cout << "Copy log : " << filename << std::endl;
             } else {
-                std::cerr << "Copy log fail : " << path.filename().string() << std::endl;
+                std::cerr << "Copy log fail : " << filename << std::endl;
+                return -1;
             }
         }
     }
+    return 0;
 }
 bool is_leap_year(int year) {
     return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
@@ -1641,7 +1676,11 @@ int main(int argc, char** argv)
             }
     
             if (is_sd_mounted) {
-                copy_csv_to_sd(mount_point);
+                int ret = copy_csv_to_sd(mount_point);
+                if (ret < 0) {
+                    // TODO: 容量不足或寫入失敗時要處理的事情
+                    std::cerr << "Error: Failed to copy CSV files to SD card." << std::endl;
+                }
                 sync();
             } else {
                 printf("no sd\n\r");

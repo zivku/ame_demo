@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <limits.h>
 #include <filesystem>
+#include <optional>
 #include <sys/ioctl.h>
 #include <netinet/in.h>
 #include <net/if.h>
@@ -30,7 +31,7 @@
 #include "math.h"
 
 #define PROJECT_NAME "holystone_ame"
-#define VERSION "v1.2"
+#define VERSION "v1.4"
 
 const char* WIFI_UART1_PATH = "/dev/ttyS1";
 const char* CONTROL_UART2_PATH = "/dev/ttyS2";
@@ -157,7 +158,7 @@ void send_ct_log_towifi_loop(const std::string& fail_log_filename, int log_reten
 void resned_ct_log_towifi_loop(const std::string& fail_log_filename, int wifi_batch_size);
 void resend_wifi_FailedLog(const std::string& fail_log_filename, int wifi_batch_size);
 int uartTransmitCurrentToWiFi(int ct_num, float current);
-void copy_csv_to_sd(const std::string& target_dir);
+int copy_csv_to_sd(const std::string& target_dir);
 std::string get_current_date_string(void);
 std::string get_current_time_string(void);
 uint32_t convertDateTimeToUnixTimestamp(const std::string& date_time_str);
