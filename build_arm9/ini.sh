@@ -6,7 +6,7 @@ echo 7 > /sys/devices/platform/backlight/backlight/backlight/brightness
 modprobe g_ether
 ifconfig usb0 up
 ifconfig usb0 192.168.100.10
-
+dmesg -n 3
 ln -sf /usr/share/zoneinfo/Asia/Taipei /etc/localtime
 
 MAIN_PROGRAM="koli"

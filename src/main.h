@@ -38,9 +38,13 @@ const std::string sd_device = "/dev/mmcblk0p1";
 const std::string mount_point = "/mnt/sd";
 std::mutex fail_log_mutex;
 std::mutex log_mutex;
+std::mutex ct_data_mutex;
 namespace fs = std::filesystem;
 using namespace std;
 using namespace egt;
+bool has_ct_data = true;
+int current_ct_group;
+int current_ct_item;
 std::vector<std::vector<std::string>> ct_current_data_list1 = {
     {"CT1", "CT2", "CT3","CT4","CT5","CT6","CT7","CT8"},
     {"11.1 A", "11.2 A", "11.3 A", "11.4 A", "11.5 A", "11.6 A", "11.7 A", "11.8 A"}
@@ -58,6 +62,7 @@ typedef struct {
     int log_retention_days = 7;       // 日誌保存天數 (預設值)
     int network_detection_delay = 1;  // 網絡檢測延遲時間 (預設值)
     int wifi_batch_size = 30;         // WiFi 批次大小 (預設值)
+    int max_failed_log_cache = 10;
 } config_t;
 enum class TIMESET_TYPE { DATE, TIME };
 struct DateTime {
@@ -68,6 +73,24 @@ struct DateTime {
     int minute;
     int second;
 };
+typedef enum {
+    NOT_IN_TIME_SETTING,
+    IN_TIME_SETTING
+} TimeSettingState;
+typedef struct {
+    TimeSettingState current;
+    TimeSettingState previous;
+    bool initialized;
+} PageState;
+typedef struct __attribute__((packed)) {
+    uint8_t ct_num;
+    uint8_t function;
+    uint8_t data_len;
+    uint8_t high_byte;
+    uint8_t low_byte;
+    uint8_t crc_low;
+    uint8_t crc_high;
+} TransmitCurrentPacket;
 
 typedef struct __attribute__((packed)) {
     uint8_t power_status : 1;    // Bit 0: 開關機狀態
@@ -88,10 +111,27 @@ typedef struct __attribute__((packed)) {
 } Flag2_t;
 
 typedef struct __attribute__((packed)) {
-    uint8_t reserved[8];         // Bit 0-7: 都是保留位
+    uint8_t reserved : 8;         // Bit 0-7: 都是保留位
 } Flag3_t;
+typedef enum {
+    CMD_NONE = 0x00,            // 什麼都不做
+    CMD_ON = 0x01,              // 開啟
+    CMD_OFF = 0x02,             // 關閉
+    CMD_STOP = 0x09,            // 停止
+    CMD_ASK = 0x0A,             // 詢問命令
+    CMD_RETURN = 0x0B,          // 回傳命令
+    CMD_SEND = 0x0C,            // 傳送命令
+    CMD_LEARN_MODE = 0x10,      // 學習模式
+    CMD_LEARN_SUCCESS = 0x11,   // 學習成功
+    CMD_EMERGENCY_LV1 = 0x1D,   // 緊急LEVEL 1
+    CMD_EMERGENCY_LV2 = 0x1E,   // 緊急LEVEL 2
+    CMD_EMERGENCY_LV3 = 0x1F,   // 緊急LEVEL 3（強制結束）
+    CMD_READ_CURRENT = 0x23,    // 讀取電流
+    CMD_SYS_TIME = 0x40,        // 系統時間
+    CMD_MAX = 0x4F              // 最大命令代碼
+} Command_t;
 typedef struct __attribute__((packed)) {
-    uint8_t start[2];         // 0x55, 0xAA
+    uint16_t start;           // 0xAA55 (Little-endian: 低位在前）
     uint8_t length;           // 資料總長（含 header 以後）
     uint16_t host_id;         // 主機 ID（Little-endian: 低位在前）
     uint8_t customer_code;    // 客戶代號
@@ -99,26 +139,29 @@ typedef struct __attribute__((packed)) {
     uint8_t signal_mode;      // 信號模式 A0/Bx/Cx
     uint8_t page_number;      // 資料頁面
     uint8_t error_code;       // 錯誤碼
-    uint8_t command;          // 命令 Function
+    Command_t command;        // 命令 Function
+    uint8_t process_flag; 
     Flag1_t flag1;            // 解析 data[0]
     Flag2_t flag2;            // 解析 data[1]
     Flag3_t flag3;            // 解析 data[2]
-    uint8_t data[25];         // 剩餘資料
+    uint8_t data[24];         // 剩餘資料
     uint8_t checksum;         // CRC 檢查碼
 } ControlPacket_t;
 
+std::string format_current_value(uint16_t value);
+void update_state(PageState *state, TimeSettingState new_state, const DateTime& current_time);
 void print_control_packet(const ControlPacket_t* pkt);
 bool validate_control_packet_checksum(const ControlPacket_t* pkt);
 void read_controlboard_data_thread(void);
-void send_ct_log_towifi_loop(const std::string& fail_log_filename);
-void resned_ct_log_towifi_loop(const std::string& fail_log_filename);
-void resend_wifi_FailedLog(const std::string& fail_log_filename);
+void send_ct_log_towifi_loop(const std::string& fail_log_filename, int log_retention_days, int max_failed_log_cache);
+void resned_ct_log_towifi_loop(const std::string& fail_log_filename, int wifi_batch_size);
+void resend_wifi_FailedLog(const std::string& fail_log_filename, int wifi_batch_size);
 int uartTransmitCurrentToWiFi(int ct_num, float current);
 void copy_csv_to_sd(const std::string& target_dir);
 std::string get_current_date_string(void);
 std::string get_current_time_string(void);
 uint32_t convertDateTimeToUnixTimestamp(const std::string& date_time_str);
-void log_current_data(const std::string& filename, const std::string& fail_log_filename,const std::vector<std::vector<std::vector<std::string>>>& data_sets, int log_retention_days);
+void log_current_data(const std::string& filename, const std::string& fail_log_filename,const std::vector<std::vector<std::vector<std::string>>>& data_sets, int log_retention_days, int max_failed_log_cache);
 std::string format_date_time(const DateTime& dt);
 std::string extract_mode_text(const std::string& input_text);
 bool is_leap_year(int year);

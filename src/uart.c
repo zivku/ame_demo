@@ -80,7 +80,7 @@ uint8_t* uart_read(const char* DEV_PATH, speed_t baudRate, int vtime, int expect
     options.c_cflag &= ~CSIZE;
     options.c_cflag |= CS8;
     options.c_cc[VTIME] = vtime; // read timeout 10*100ms
-    options.c_cc[VMIN] = 0;
+    options.c_cc[VMIN] = expected_bytes;
     options.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG);
     options.c_oflag &= ~OPOST;
     options.c_iflag &= ~(ICRNL | IXON);
@@ -92,9 +92,9 @@ uint8_t* uart_read(const char* DEV_PATH, speed_t baudRate, int vtime, int expect
 
     while ((ret = read(fd, rx_data, BUF_SIZE - 1)) > 0) {
         received_bytes += ret;
-        if (received_bytes == expected_bytes){
-            break;
-        }
+        // if (received_bytes == expected_bytes){
+        //     break;
+        // }
     }
     close(fd);
     return rx_data;
