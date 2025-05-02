@@ -31,7 +31,12 @@
 #include "math.h"
 
 #define PROJECT_NAME "holystone_ame"
-#define VERSION "v1.4"
+#define VERSION "v1.6"
+#define CONTROL_BOARD_BUFFER_SIZE 1024  // 緩衝區大小
+#define CONTROL_BOARD_MAX_PACKET_SIZE 64     // 假設最大封包大小
+
+uint8_t control_board_buffer[CONTROL_BOARD_BUFFER_SIZE];  // 用來儲存從 UART 讀取的資料
+size_t control_board_buffer_len = 0;  // 當前緩衝區的資料長度
 
 const char* WIFI_UART1_PATH = "/dev/ttyS1";
 const char* CONTROL_UART2_PATH = "/dev/ttyS2";
@@ -43,6 +48,9 @@ std::mutex ct_data_mutex;
 namespace fs = std::filesystem;
 using namespace std;
 using namespace egt;
+bool page31_received = false;
+bool page32_received = false;
+bool page33_received = false;
 bool has_ct_data = true;
 int current_ct_group;
 int current_ct_item;
@@ -149,8 +157,27 @@ typedef struct __attribute__((packed)) {
     uint8_t checksum;         // CRC 檢查碼
 } ControlPacket_t;
 
+typedef struct __attribute__((packed)) {
+    uint16_t start;           // 0xAA55 (little-endian: 實際送出為 0x55, 0xAA)
+    uint8_t length;           // 資料長度 (例如: 0x11)
+    uint16_t host_id;         // 主機 ID（Little-endian: 低位在前）0x1E25
+    uint8_t customer_code;    // 客戶代號 0x03
+    uint8_t model_code;       // 機型代號 0x29
+    uint8_t signal_mode;      // 信號模式 A0/Bx/Cx  0xB9
+    uint8_t page_number;      // 資料頁面           0x11
+    uint8_t error_code;       // 錯誤碼             0x00
+    uint8_t command;          // 命令 Function      0x40
+    uint8_t hour;             // 時
+    uint8_t minute;           // 分
+    uint8_t second;           // 秒
+    uint8_t reserved2[5];     // 0x00 x5
+    uint8_t checksum;         // 加總 [0~18] + 0x66
+    uint8_t tail;             // 0x00
+} SetTime_ControlPacket_t;
+
 std::string format_current_value(uint16_t value);
 void update_state(PageState *state, TimeSettingState new_state, const DateTime& current_time);
+void write_controlboard_set_time(void);
 void print_control_packet(const ControlPacket_t* pkt);
 bool validate_control_packet_checksum(const ControlPacket_t* pkt);
 void read_controlboard_data_thread(void);

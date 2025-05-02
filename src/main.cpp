@@ -555,9 +555,7 @@ void send_ct_log_towifi_loop(const std::string& fail_log_filename, int log_reten
             std::vector<std::vector<std::vector<std::string>>> ct_data_groups;
 
             {
-                perror("send ct data test start\n\r");
                 std::lock_guard<std::mutex> lock(ct_data_mutex);
-                perror("send ct data test end\n\r");
                 ct_data_groups = {
                     ct_current_data_list1,
                     ct_current_data_list2,
@@ -652,8 +650,41 @@ void print_control_packet(const ControlPacket_t* pkt) {
 }
 std::string format_current_value(uint16_t value) {
     std::ostringstream oss;
-    oss << std::fixed << std::setprecision(2) << (value / 10.0);  // 除以10.0來獲得帶小數的值
+    oss << std::fixed << std::setprecision(2) << (value / 100.0);  // 除以100.0來獲得帶小數的值
     return oss.str() + " A";  // 加上單位
+}
+void write_controlboard_set_time(){
+    SetTime_ControlPacket_t packet;
+    packet.start = 0xAA55;                // little-endian：實際送出為 0x55 0xAA
+    packet.length = 0x11;                 // 資料長度
+    packet.host_id = 0x5BB2;             // 主機 ID（low byte 0x5B, high byte 0xB2）
+    packet.customer_code = 0x03;
+    packet.model_code = 0x29;
+    packet.signal_mode = 0xB9;
+    packet.page_number = 0x11;
+    packet.error_code = 0x00;
+    packet.command = 0x40;
+    
+    std::string time_str = get_current_time_string();  // e.g., "15:42:07"
+    int hour, minute, second;
+    if (sscanf(time_str.c_str(), "%d:%d:%d", &hour, &minute, &second) == 3) {
+        packet.hour = static_cast<uint8_t>(hour);
+        packet.minute = static_cast<uint8_t>(minute);
+        packet.second = static_cast<uint8_t>(second);
+    } else {
+        std::cerr << "Failed to parse time string!" << std::endl;
+    }
+
+    memset(packet.reserved2, 0, sizeof(packet.reserved2));
+
+    uint8_t* data = reinterpret_cast<uint8_t*>(&packet);
+    size_t length = sizeof(SetTime_ControlPacket_t) - sizeof(packet.checksum) - sizeof(packet.tail);
+    packet.checksum = calculate_simple_checksum(data, length);
+    packet.tail = 0x00;
+
+    speed_t speed = B115200;
+    int vtime = 0;
+    uart_write(CONTROL_UART2_PATH, speed, vtime, reinterpret_cast<uint8_t*>(&packet), sizeof(SetTime_ControlPacket_t));
 }
 void read_controlboard_data_thread(){
     speed_t speed = B115200;
@@ -661,92 +692,149 @@ void read_controlboard_data_thread(){
     int received_bytes = 0;
     int expected_bytes = 40;
     while(1) {
-        int received_bytes = 0;
         uint8_t *receive = uart_read(CONTROL_UART2_PATH, speed, vtime, expected_bytes, received_bytes);
-        if (receive != NULL && received_bytes == 40) {
-            ControlPacket_t *pkt = (ControlPacket_t *)receive;
-            print_control_packet(pkt);
-            if(pkt->start == 0xAA55){
-                if (validate_control_packet_checksum(pkt)) {
-                    
-                    printf("Checksum valid!\n");
-                    print_control_packet(pkt);
-                    // TODO
-                    perror("control ct data test start\n\r");
-                    std::lock_guard<std::mutex> lock(ct_data_mutex);
-                    perror("control ct data test end\n\r");
-                    switch (pkt->command) {
-                        case CMD_READ_CURRENT:
-                            printf("Handling CMD_READ_CURRENT\n");
-                            if(pkt->process_flag == 0x01){
-                                for (int i = 0; i < 8; i++) {
-                                    uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
-                                    ct_current_data_list1[1][i] = format_current_value(value);
-                                }
-                                for (int i = 8; i < 12; i++) {
-                                    uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
-                                    ct_current_data_list2[1][i - 8] = format_current_value(value);
-                                }
-                            }
-                            else if(pkt->process_flag == 0x02){
-                                for (int i = 0; i < 6; i++) {
-                                    uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
-                                    ct_current_data_list2[1][i + 4] = format_current_value(value);
-                                }
-                                for (int i = 6; i < 12; i++) {
-                                    uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
-                                    ct_current_data_list3[1][i - 6] = format_current_value(value);
-                                }
-
-                            }
-                            else if(pkt->process_flag == 0x03){
-                                for (int i = 0; i < 6; i++) {
-                                    uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
-                                    ct_current_data_list3[1][i + 6] = format_current_value(value);
-                                }
-                                std::cout << "Time: " 
-                                        << "Hour: " << pkt->data[12] << ", "
-                                        << "Min: " << pkt->data[13] << ", "
-                                        << "Sec: " << pkt->data[14] << std::endl;
-                                std::cout << "Version: " << pkt->data[24] << std::endl;
-                                has_ct_data = true;
-                            }
-                            
-                            break;
-                
-                        case CMD_SYS_TIME:
-                            printf("Handling CMD_SYS_TIME\n");
-                            break;
-                
-                        case CMD_ON:
-                            printf("Handling CMD_ON\n");
-                            break;
-                
-                        case CMD_OFF:
-                            printf("Handling CMD_OFF\n");
-                            break;
-                
-                        default:
-                            printf("Unknown command: 0x%02X\n", pkt->command);
-                            break;
+        if (receive != NULL) {
+            // 將讀取到的資料加入到緩衝區
+            if (control_board_buffer_len + received_bytes <= CONTROL_BOARD_BUFFER_SIZE) {
+                memcpy(control_board_buffer + control_board_buffer_len, receive, received_bytes);
+                control_board_buffer_len += received_bytes;
+            } 
+            else {
+                // 緩衝區溢出處理
+                control_board_buffer_len = 0;
+                fprintf(stderr, "UART buffer overflow. Resetting.\n");
+                continue;
+            }
+            size_t i = 0;
+            while (i + 3 < control_board_buffer_len) {  // 至少要有 3 字節才能查找標頭
+                // 找到同步字 (0xAA55)
+                if (control_board_buffer[i] == 0x55 && control_board_buffer[i + 1] == 0xAA) {
+                    uint8_t len = control_board_buffer[i + 2];  // 根據協議獲取封包長度
+                    if (i + len > control_board_buffer_len) {
+                        // 如果資料長度不足，跳出來等待更多資料
+                        break;
                     }
+
+                    // 找到完整封包，處理它
+                    const uint8_t* pkt_buf = control_board_buffer + i;
+                    ControlPacket_t* pkt = (ControlPacket_t*)pkt_buf;
+                    print_control_packet(pkt);
+                    
+                    
+                    if (validate_control_packet_checksum(pkt)) {
+                        printf("Checksum valid!\n");
+                        // 處理封包
+                        std::lock_guard<std::mutex> lock(ct_data_mutex);
+                        switch (pkt->command) {
+                            case CMD_READ_CURRENT:
+                                printf("Handling CMD_READ_CURRENT\n");
+                                if (pkt->page_number == 0x31) {
+                                    page31_received = true;
+                                    for (int i = 0; i < 8; i++) {
+                                        uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
+                                        ct_current_data_list1[1][i] = format_current_value(value);
+                                    }
+                                    for (int i = 8; i < 12; i++) {
+                                        uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
+                                        ct_current_data_list2[1][i - 8] = format_current_value(value);
+                                    }
+                                }
+                                else if (pkt->page_number == 0x32) {
+                                    page32_received = true;
+                                    for (int i = 0; i < 6; i++) {
+                                        uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
+                                        ct_current_data_list2[1][i + 4] = format_current_value(value);
+                                    }
+                                    for (int i = 6; i < 12; i++) {
+                                        uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
+                                        ct_current_data_list3[1][i - 6] = format_current_value(value);
+                                    }
+                                }
+                                else if (pkt->page_number == 0x33) {
+                                    page33_received = true;
+                                    for (int i = 0; i < 6; i++) {
+                                        uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
+                                        ct_current_data_list3[1][i + 6] = format_current_value(value);
+                                    }
+                                    std::cout << "Time: "
+                                                << "Hour: " << pkt->data[12] << ", "
+                                                << "Min: " << pkt->data[13] << ", "
+                                                << "Sec: " << pkt->data[14] << std::endl;
+                                    std::cout << "Version: " << pkt->data[24] << std::endl;
+                                    std::string time_str = get_current_time_string();
+                                    int hour, minute, second;
+                                    
+                                    if (sscanf(time_str.c_str(), "%d:%d:%d", &hour, &minute, &second) == 3) {
+                                        uint8_t dev_hour = pkt->data[12];
+                                        uint8_t dev_min = pkt->data[13];
+                                        uint8_t dev_sec = pkt->data[14];
+                                        uint8_t sys_hour = static_cast<uint8_t>(hour);
+                                        uint8_t sys_minute = static_cast<uint8_t>(minute);
+                                        uint8_t sys_second = static_cast<uint8_t>(second);
+                                        int device_total_sec = dev_hour * 3600 + dev_min * 60 + dev_sec;
+                                        int system_total_sec = sys_hour * 3600 + sys_minute * 60 + sys_second;
+                                        int time_diff = std::abs(device_total_sec - system_total_sec);
+                                        if (time_diff >= 60) {
+                                            std::cout << "Time difference = " << time_diff << " seconds. Syncing time..." << std::endl;
+                                    
+                                            // 呼叫你自己實作的校時函式
+                                            write_controlboard_set_time();
+                                        }
+                                    } else {
+                                        std::cerr << "Failed to parse time string!" << std::endl;
+                                    }
+                                }
+                                break;
+
+                            case CMD_SYS_TIME:
+                                printf("Handling CMD_SYS_TIME\n");
+                                break;
+
+                            case CMD_ON:
+                                printf("Handling CMD_ON\n");
+                                break;
+
+                            case CMD_OFF:
+                                printf("Handling CMD_OFF\n");
+                                break;
+
+                            default:
+                                printf("Unknown command: 0x%02X\n", pkt->command);
+                                break;
+                        }
+                    }
+                    else {
+                        printf("Checksum error!\n");
+                    }
+                    // 處理完這個封包，指針移動到下一個封包
+                    i += len;
                 } 
                 else {
-                    printf("Checksum error!\n");
-                    //continue;
+                    // 如果當前資料不是同步字，移動到下一位繼續查找
+                    printf("ControlBoard start data error. Retrying...\n");
+                    i++;
                 }
             }
-            else{
-                printf("ControlBoard start data error. Retrying...\n");
-                //continue;
+            if (!has_ct_data && page31_received && page32_received && page33_received) {
+                has_ct_data = true;
+            
+                printf("All CT data received. Marking as complete.\n");
+            }
+            // 將剩餘資料移到緩衝區前端
+            if (i < control_board_buffer_len) {
+                memmove(control_board_buffer, control_board_buffer + i, control_board_buffer_len - i);
+                control_board_buffer_len -= i;  // 更新緩衝區長度
+            } else {
+                control_board_buffer_len = 0;  // 如果全部資料都處理完，清空緩衝區
             }
         }
         else{
             printf("Invalid packet size: %d bytes. Skipping...\n", received_bytes);
+            //usleep(1*1000*1000);
             //free(receive);
             //continue;
         }
-        usleep(1*1000*1000);
+        
         free(receive);
     }
 }
@@ -764,6 +852,7 @@ void update_state(PageState *state, TimeSettingState new_state, const DateTime& 
     if (state->previous == IN_TIME_SETTING &&
         state->current == NOT_IN_TIME_SETTING) {
         set_system_time(current_time);
+        write_controlboard_set_time();
     }
 }
 int main(int argc, char** argv)
@@ -1115,6 +1204,212 @@ int main(int argc, char** argv)
                 ct_current_data->text(ct_current_data_list3[1][current_ct_item]);
             break;
         }
+        switch(current_ct_item) {
+            case 0:
+                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] == "0.00 A"){
+                    ct_status1->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
+                    ct_status1->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
+                    ct_status1->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status1->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
+                    ct_status1->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status1->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+            break;
+            case 1:
+                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] == "0.00 A"){
+                    ct_status2->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
+                    ct_status2->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
+                    ct_status2->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status2->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
+                    ct_status2->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status2->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+            break;
+            case 2:
+                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] == "0.00 A"){
+                    ct_status3->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
+                    ct_status3->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
+                    ct_status3->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status3->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
+                    ct_status3->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status3->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+            break;
+            case 3:
+                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] == "0.00 A"){
+                    ct_status4->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
+                    ct_status4->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
+                    ct_status4->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status4->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
+                    ct_status4->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status4->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+            break;
+            case 4:
+                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] == "0.00 A"){
+                    ct_status5->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
+                    ct_status5->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
+                    ct_status5->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status5->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
+                    ct_status5->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status5->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+            break;
+            case 5:
+                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] == "0.00 A"){
+                    ct_status6->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
+                    ct_status6->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
+                    ct_status6->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status6->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
+                    ct_status6->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status6->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+            break;
+            case 6:
+                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] == "0.00 A"){
+                    ct_status7->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
+                    ct_status7->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
+                    ct_status7->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status7->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
+                    ct_status7->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status7->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+            break;
+            case 7:
+                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] == "0.00 A"){
+                    ct_status8->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
+                    ct_status8->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
+                    ct_status8->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status8->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
+                    ct_status8->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status8->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+            break;
+            case 8: 
+                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
+                    ct_status9->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status9->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
+                    ct_status9->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status9->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+            break;
+            case 9:
+                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
+                    ct_status10->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status10->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
+                    ct_status10->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status10->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+            break;
+            case 10: 
+                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
+                    ct_status11->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status11->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+            break;
+            case 11:
+                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
+                    ct_status12->image(egt::Image("file:image/white_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status12->image(egt::Image("file:image/green_rectangle.png"));
+                } 
+            break;
+        }
     });
     ct_next_data_button->on_click([&](egt::Event &)
     {
@@ -1154,54 +1449,144 @@ int main(int argc, char** argv)
         
         switch(current_ct_item) {
             case 0:
-                ct_status1->image(egt::Image("file:image/green_rectangle.png"));
+                ct_status1->image(egt::Image("file:image/white_rectangle.png"));
                 ct_status8->image(egt::Image("file:image/white_rectangle.png"));
                 ct_status10->image(egt::Image("file:image/white_rectangle.png"));
                 ct_status12->image(egt::Image("file:image/white_rectangle.png"));
+                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
+                    ct_status1->image(egt::Image("file:image/green_rectangle.png"));
+                }
+                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status1->image(egt::Image("file:image/green_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status1->image(egt::Image("file:image/green_rectangle.png"));
+                }    
             break;
             case 1:
-                ct_status2->image(egt::Image("file:image/green_rectangle.png"));
+                ct_status2->image(egt::Image("file:image/white_rectangle.png"));
                 ct_status1->image(egt::Image("file:image/white_rectangle.png"));
+                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
+                    ct_status2->image(egt::Image("file:image/green_rectangle.png"));
+                }
+                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status2->image(egt::Image("file:image/green_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status2->image(egt::Image("file:image/green_rectangle.png"));
+                } 
             break;
             case 2:
-                ct_status3->image(egt::Image("file:image/green_rectangle.png"));
+                ct_status3->image(egt::Image("file:image/white_rectangle.png"));
                 ct_status2->image(egt::Image("file:image/white_rectangle.png"));
+                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
+                    ct_status3->image(egt::Image("file:image/green_rectangle.png"));
+                }
+                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status3->image(egt::Image("file:image/green_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status3->image(egt::Image("file:image/green_rectangle.png"));
+                } 
             break;
             case 3:
-                ct_status4->image(egt::Image("file:image/green_rectangle.png"));
+                ct_status4->image(egt::Image("file:image/white_rectangle.png"));
                 ct_status3->image(egt::Image("file:image/white_rectangle.png"));
+                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
+                    ct_status4->image(egt::Image("file:image/green_rectangle.png"));
+                }
+                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status4->image(egt::Image("file:image/green_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status4->image(egt::Image("file:image/green_rectangle.png"));
+                } 
             break;
             case 4:
-                ct_status5->image(egt::Image("file:image/green_rectangle.png"));
+                ct_status5->image(egt::Image("file:image/white_rectangle.png"));
                 ct_status4->image(egt::Image("file:image/white_rectangle.png"));
+                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
+                    ct_status5->image(egt::Image("file:image/green_rectangle.png"));
+                }
+                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status5->image(egt::Image("file:image/green_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status5->image(egt::Image("file:image/green_rectangle.png"));
+                } 
             break;
             case 5:
-                ct_status6->image(egt::Image("file:image/green_rectangle.png"));
+                ct_status6->image(egt::Image("file:image/white_rectangle.png"));
                 ct_status5->image(egt::Image("file:image/white_rectangle.png"));
+                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
+                    ct_status6->image(egt::Image("file:image/green_rectangle.png"));
+                }
+                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status6->image(egt::Image("file:image/green_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status6->image(egt::Image("file:image/green_rectangle.png"));
+                } 
             break;
             case 6:
-                ct_status7->image(egt::Image("file:image/green_rectangle.png"));
+                ct_status7->image(egt::Image("file:image/white_rectangle.png"));
                 ct_status6->image(egt::Image("file:image/white_rectangle.png"));
+                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
+                    ct_status7->image(egt::Image("file:image/green_rectangle.png"));
+                }
+                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status7->image(egt::Image("file:image/green_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status7->image(egt::Image("file:image/green_rectangle.png"));
+                } 
             break;
             case 7:
-                ct_status8->image(egt::Image("file:image/green_rectangle.png"));
+                ct_status8->image(egt::Image("file:image/white_rectangle.png"));
                 ct_status7->image(egt::Image("file:image/white_rectangle.png"));
+                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
+                    ct_status8->image(egt::Image("file:image/green_rectangle.png"));
+                }
+                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status8->image(egt::Image("file:image/green_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status8->image(egt::Image("file:image/green_rectangle.png"));
+                } 
             break;
             case 8:
-                ct_status9->image(egt::Image("file:image/green_rectangle.png"));
+                ct_status9->image(egt::Image("file:image/white_rectangle.png"));
                 ct_status8->image(egt::Image("file:image/white_rectangle.png"));
+                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status9->image(egt::Image("file:image/green_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status9->image(egt::Image("file:image/green_rectangle.png"));
+                } 
             break;
             case 9:
-                ct_status10->image(egt::Image("file:image/green_rectangle.png"));
+                ct_status10->image(egt::Image("file:image/white_rectangle.png"));
                 ct_status9->image(egt::Image("file:image/white_rectangle.png"));
+                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+                    ct_status10->image(egt::Image("file:image/green_rectangle.png"));
+                }
+                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status10->image(egt::Image("file:image/green_rectangle.png"));
+                } 
             break;
             case 10:
-                ct_status11->image(egt::Image("file:image/green_rectangle.png"));
+                ct_status11->image(egt::Image("file:image/white_rectangle.png"));
                 ct_status10->image(egt::Image("file:image/white_rectangle.png"));
+                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status11->image(egt::Image("file:image/green_rectangle.png"));
+                }
             break;
             case 11:
-                ct_status12->image(egt::Image("file:image/green_rectangle.png"));
+                ct_status12->image(egt::Image("file:image/white_rectangle.png"));
                 ct_status11->image(egt::Image("file:image/white_rectangle.png"));
+                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+                    ct_status12->image(egt::Image("file:image/green_rectangle.png"));
+                }
             break;
         }
     });
@@ -1697,7 +2082,7 @@ int main(int argc, char** argv)
 
     log_timer.start();
     network_timer.start();
-    
+    write_controlboard_set_time();
     std::thread read_controlboard_thread(read_controlboard_data_thread);
     read_controlboard_thread.detach();
     std::thread resend_ct_thread(resned_ct_log_towifi_loop, fail_log_filename, cfg.wifi_batch_size);

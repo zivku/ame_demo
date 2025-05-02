@@ -29,5 +29,6 @@ uint8_t calculate_simple_checksum(const uint8_t* data, size_t length) {
         sum += data[i];
     }
     sum += 0x66;
+    
     return static_cast<uint8_t>(sum & 0xFF);
 }
