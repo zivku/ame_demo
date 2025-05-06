@@ -42,7 +42,7 @@ uint8_t* uart_transmit(const char* DEV_PATH, speed_t baudRate, int vtime, uint8_
     options.c_cflag |= (CLOCAL | CREAD);
     tcflush(fd, TCIFLUSH);
     tcsetattr(fd, TCSANOW, &options);
-
+    
     /* write uart */
     ret = write(fd, tx_data, tx_len);
     if (ret != tx_len) {
@@ -53,10 +53,6 @@ uint8_t* uart_transmit(const char* DEV_PATH, speed_t baudRate, int vtime, uint8_
     }
     close(fd);
     return rx_data;
-        
-    
-    
-    
     
 }
 uint8_t* uart_read(const char* DEV_PATH, speed_t baudRate, int vtime, int expected_bytes, int&received_bytes)
@@ -91,10 +87,11 @@ uint8_t* uart_read(const char* DEV_PATH, speed_t baudRate, int vtime, int expect
     tcsetattr(fd, TCSANOW, &options);
 
     while ((ret = read(fd, rx_data, BUF_SIZE - 1)) > 0) {
-        //printf("============================================================\n\r");
+        // printf("============================================================\n\r");
         //printf("Read %d bytes, total received: %d\n\r", ret, received_bytes + ret);
+        //printf("In file: %s, function: %s, line: %d\n", __FILE__, __func__, __LINE__);
         received_bytes += ret;
-        if (received_bytes == expected_bytes){
+        if (received_bytes >= expected_bytes){
             break;
         }
     }

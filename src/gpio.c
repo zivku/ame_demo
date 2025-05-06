@@ -11,7 +11,7 @@ using std::cout;
 using std::endl;
 using std::reverse;
 using std::string;
-void gpio_output(char* gpio_path, int gpio_pin, int value)
+void gpio_output(const char* gpio_path, int gpio_pin, int value)
 {
     int fd;
     fd = open(gpio_path, O_RDWR);
@@ -45,7 +45,7 @@ void gpio_output(char* gpio_path, int gpio_pin, int value)
     close(req.fd);
     close(fd);
 }
-int gpio_input(char* gpio_path, int gpio_pin, int mode) {
+int gpio_input(const char* gpio_path, int gpio_pin, int mode) {
     int fd;
     fd = open(gpio_path, O_RDWR);
     if (fd == -1) {

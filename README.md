@@ -33,3 +33,15 @@
      <li>6. [INFO]在ct_timer.on_timeout中加入對CT電流的判斷，決定圖片是綠色或白色</li> 
      <li>7. [INFO]在ct_next_data_button->on_click中加入對CT電流的判斷，決定圖片是綠色或白色</li> 
 </ul>
+
+5/5 更新內容 : <br>   
+<ul>
+     <li>1. [INFO]增加GPIO路徑變數，新增adc.c與adc.h作為電池ADC讀值用</li>   
+     <li>2. [INFO]增加buzzer_on_button_click(void);和beep(void);作為螢幕按鈕的回饋音</li> 
+</ul>
+5/6 v1.7更新內容 : <br>    
+<ul>
+     <li>1. [debug]resend_wifi_FailedLog中補傳機制當初寫測試時跟上傳用到同一組UART(已解決)</li>   
+     <li>2. [INFO]加入last_wifi_reset_time、WIFI_RESET_COOLDOWN(5)、wifi_reset_attempts、WIFI_RESET_RETRY_LIMIT、wifi_reset_blocked五個變數應用在log_current_data function中作為WIFI連線異常時reset工作用</li>
+     <li>3. [INFO]在network_timer.on_timeout中加入對wifi_reset_blocked的判斷決定是否改變WIFI圖樣</li>  
+</ul>

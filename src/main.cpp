@@ -53,14 +53,14 @@ void resend_wifi_FailedLog(const std::string& fail_log_filename, int wifi_batch_
         speed_t speed = B115200;
         int vtime = 0 * 10;
         int received_bytes = 0;
-        uint8_t* recive = uart_transmit(WIFI_UART1_PATH, speed, vtime, transmit_current, transmit_current_len, received_bytes);
-        std::string response(reinterpret_cast<char*>(recive), received_bytes);
+        // uint8_t* recive = uart_transmit(WIFI_UART1_PATH, speed, vtime, transmit_current, transmit_current_len, received_bytes);
+        // std::string response(reinterpret_cast<char*>(recive), received_bytes);
 
-        // 失敗的資料記錄
-        if (response.find("send ok") == std::string::npos) {
-            failed_lines.push_back(line);
-        }
-
+        // // 失敗的資料記錄
+        // if (response.find("send ok") == std::string::npos) {
+        //     failed_lines.push_back(line);
+        // }
+        failed_lines.push_back(line);
         line_count++;
     }
 
@@ -101,26 +101,63 @@ int uartTransmitCurrentToWiFi(int ct_num, float current){
     packet.data_len = 0x02;
     packet.high_byte = current_value >> 8;
     packet.low_byte = current_value & 0xFF;
-
+    packet.crc_low = 0xFF;
+    packet.crc_high = 0xFF;
     uint8_t* raw_ptr = reinterpret_cast<uint8_t*>(&packet);
+    
     uint16_t crc = calculate_crc16(raw_ptr, sizeof(packet) - 2);
     packet.crc_low = crc & 0xFF;
     packet.crc_high = (crc >> 8) & 0xFF;
 
     speed_t speed = B115200;
-    int vtime = 0 * 10;
+    int vtime = 1;
     int received_bytes = 0;
 
     uint8_t *recive = uart_transmit(WIFI_UART1_PATH, speed, vtime, raw_ptr, sizeof(packet), received_bytes);
+    
     std::string response(reinterpret_cast<char*>(recive), received_bytes);
-    std::cout << "Received: " << response << std::endl;
-    if (response.find("send ok") == std::string::npos) { 
+    std::cout << "Received: " << response << "CT NUM: " << ct_num << std::endl;
+    if (response.find("send ok") != std::string::npos) {
+        std::cerr << "Transmit OK!\n\r" << std::endl;
+        return TRANSMIT_OK;
+    } 
+    else if (response.find("send fail") != std::string::npos) {
         std::cerr << "Transmission failed! Logging failed data.\n\r" << std::endl;
-        return -1;
-    }
+        return TRANSMIT_SEND_FAIL;
+    } 
+    else if (response.find("checksum error") != std::string::npos) {
+        std::cerr << "Checksum error! Discarding data.\n\r" << std::endl;
+        return TRANSMIT_CHECKSUM_ERROR;
+    } 
+    else if (response.find("WiFi error:") != std::string::npos) {
+        int error_code = 0;
+        size_t pos = response.find("WiFi error:");
+        if (pos != std::string::npos) {
+            sscanf(response.c_str() + pos, "WiFi error: %x", &error_code);
+        }
+        std::cerr << "WiFi error! Code: 0x" << std::hex << error_code << "\n\r";
+        // 判斷對應錯誤碼
+        switch (error_code) {
+            case 0x3001:
+                std::cerr << "Error: Wi-Fi not initialized.\n\r";
+                return TRANSMIT_WIFI_ERROR_NOT_INIT;
+            case 0x3002:
+                std::cerr << "Error: Wi-Fi not started.\n\r";
+                return TRANSMIT_WIFI_ERROR_NOT_STARTED;
+            case 0x3003:
+                std::cerr << "Error: Wi-Fi not connected to AP.\n\r";
+                return TRANSMIT_WIFI_ERROR_NOT_CONNECTED;
+            case 0x3004:
+                std::cerr << "Error: Invalid argument.\n\r";
+                return TRANSMIT_WIFI_ERROR_INVALID_ARG;
+            default:
+                std::cerr << "Error: Unknown Wi-Fi error.\n\r";
+                return TRANSMIT_WIFI_ERROR_UNKNOWN;
+        }
+    } 
     else {
-        std::cerr << "Transmis OK!\n\r" << std::endl;
-        return 1;
+        std::cerr << "Unknown response received.\n\r" << std::endl;
+        return TRANSMIT_UNKNOWN_RESPONSE;
     }
 }
 int copy_csv_to_sd(const std::string& target_dir) {
@@ -324,6 +361,14 @@ void create_log_file_if_not_exists(const std::string& filename) {
         std::cerr << "open log file error!\n";
     }
 }
+// 冷卻機制：上次 reset 的時間
+static std::chrono::steady_clock::time_point last_wifi_reset_time = std::chrono::steady_clock::now() - std::chrono::seconds(60);
+
+// 定義 reset 間隔（冷卻時間）
+const std::chrono::seconds WIFI_RESET_COOLDOWN(5);
+static int wifi_reset_attempts = 0;  // 重試次數
+const int WIFI_RESET_RETRY_LIMIT = 3;
+static bool wifi_reset_blocked = false; 
 void log_current_data(const std::string& filename, const std::string& fail_log_filename,const std::vector<std::vector<std::vector<std::string>>>& data_sets, int log_retention_days, int max_failed_log_cache) {
     manage_log_files("current_data_log_", log_retention_days);
     std::lock_guard<std::mutex> lock(log_mutex);
@@ -368,9 +413,116 @@ void log_current_data(const std::string& filename, const std::string& fail_log_f
             log_file << con_label << ", " << ct_name << ", " << data << ", ";
             float current = std::stof(data);
             int ct_num = std::stoi(ct_name.substr(2));
+            //std::cout << "ct_num: " << ct_num << ", current: " << current << std::endl;
             int uart_to_wifi_ret = uartTransmitCurrentToWiFi(ct_num, current);
-            if (uart_to_wifi_ret < 0) {
-                failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", Transmission failed\n");
+            auto now = std::chrono::steady_clock::now();
+            switch (uart_to_wifi_ret) {
+                case TRANSMIT_OK:
+                    // 成功，不需要額外處理
+                    wifi_reset_blocked = false;
+                    wifi_reset_attempts = 0;
+                    break;
+            
+                case TRANSMIT_SEND_FAIL:
+                    std::cerr << "Send failed. Logging for retry.\n";
+                    failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", Send fail\n");
+                    break;
+            
+                case TRANSMIT_CHECKSUM_ERROR:
+                    std::cerr << "Checksum error. Discarding this packet.\n";
+                    failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", Checksum error\n");
+                    break;
+            
+                case TRANSMIT_WIFI_ERROR_NOT_INIT:
+                    if (!wifi_reset_blocked && now - last_wifi_reset_time > WIFI_RESET_COOLDOWN) {
+                        std::cerr << "[NOT_INIT] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
+                        WIFI_reset_thread();
+                        last_wifi_reset_time = now;
+                        wifi_reset_attempts++;
+                        if (wifi_reset_attempts >= WIFI_RESET_RETRY_LIMIT) {
+                            wifi_reset_blocked = true;  // 超過次數，立旗
+                            std::cerr << "Wi-Fi reset attempts exceeded. Blocking further resets. Manual intervention required.\n";
+                        }
+                    } 
+                    else if (wifi_reset_blocked) {
+                        std::cerr << "[NOT_INIT] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
+                    }
+                    failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", WiFi error: " + std::to_string(uart_to_wifi_ret) + "\n");
+                    break;
+                case TRANSMIT_WIFI_ERROR_NOT_STARTED:
+                    if (!wifi_reset_blocked && now - last_wifi_reset_time > WIFI_RESET_COOLDOWN) {
+                        std::cerr << "[NOT_STARTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
+                        WIFI_reset_thread();
+                        last_wifi_reset_time = now;
+                        wifi_reset_attempts++;
+                        if (wifi_reset_attempts >= WIFI_RESET_RETRY_LIMIT) {
+                            wifi_reset_blocked = true;  // 超過次數，立旗
+                            std::cerr << "Wi-Fi reset attempts exceeded. Blocking further resets. Manual intervention required.\n";
+                        }
+                    } 
+                    else if (wifi_reset_blocked) {
+                        std::cerr << "[NOT_STARTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
+                    }
+                    failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", WiFi error: " + std::to_string(uart_to_wifi_ret) + "\n");
+                    break;
+                case TRANSMIT_WIFI_ERROR_NOT_CONNECTED:
+                    if (!wifi_reset_blocked && now - last_wifi_reset_time > WIFI_RESET_COOLDOWN) {
+                        std::cerr << "[NOT_CONNECTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
+                        WIFI_reset_thread();
+                        last_wifi_reset_time = now;
+                        wifi_reset_attempts++;
+                        if (wifi_reset_attempts >= WIFI_RESET_RETRY_LIMIT) {
+                            wifi_reset_blocked = true;  // 超過次數，立旗
+                            std::cerr << "Wi-Fi reset attempts exceeded. Blocking further resets. Manual intervention required.\n";
+                        }
+                    } 
+                    else if (wifi_reset_blocked) {
+                        std::cerr << "[NOT_CONNECTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
+                    }
+                    failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", WiFi error: " + std::to_string(uart_to_wifi_ret) + "\n");
+                    break;
+                case TRANSMIT_WIFI_ERROR_INVALID_ARG:
+                    if (!wifi_reset_blocked && now - last_wifi_reset_time > WIFI_RESET_COOLDOWN) {
+                        std::cerr << "[NOT_CONNECTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
+                        WIFI_reset_thread();
+                        last_wifi_reset_time = now;
+                        wifi_reset_attempts++;
+                        if (wifi_reset_attempts >= WIFI_RESET_RETRY_LIMIT) {
+                            wifi_reset_blocked = true;  // 超過次數，立旗
+                            std::cerr << "Wi-Fi reset attempts exceeded. Blocking further resets. Manual intervention required.\n";
+                        }
+                    } 
+                    else if (wifi_reset_blocked) {
+                        std::cerr << "[NOT_CONNECTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
+                    }
+                    failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", WiFi error: " + std::to_string(uart_to_wifi_ret) + "\n");
+                    break;
+                case TRANSMIT_WIFI_ERROR_UNKNOWN:
+                    std::cerr << "Wi-Fi error occurred. Logging for retry.\n";
+                    failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", WiFi error: " + std::to_string(uart_to_wifi_ret) + "\n");
+                    break;
+            
+                case TRANSMIT_UNKNOWN_RESPONSE:
+                    if (!wifi_reset_blocked && now - last_wifi_reset_time > WIFI_RESET_COOLDOWN) {
+                        std::cerr << "[NOT_CONNECTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
+                        WIFI_reset_thread();
+                        last_wifi_reset_time = now;
+                        wifi_reset_attempts++;
+                        if (wifi_reset_attempts >= WIFI_RESET_RETRY_LIMIT) {
+                            wifi_reset_blocked = true;  // 超過次數，立旗
+                            std::cerr << "Wi-Fi reset attempts exceeded. Blocking further resets. Manual intervention required.\n";
+                        }
+                    } 
+                    else if (wifi_reset_blocked) {
+                        std::cerr << "[NOT_CONNECTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
+                    }
+                    std::cerr << "Adding to fail log: " << timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) << std::endl;
+                    failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", WiFi error: " + std::to_string(uart_to_wifi_ret) + "\n");
+                    break;
+                default:
+                    std::cerr << "Unknown response. Logging for analysis.\n";
+                    failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", Unknown error\n");
+                    break;
             }
         }
     }
@@ -385,15 +537,16 @@ void log_current_data(const std::string& filename, const std::string& fail_log_f
             std::cerr << "Failed to open fail log file!" << std::endl;
             return;
         }
-
         
         for (const auto& fail_record : failed_transmissions) {
+            //std::cout << "[Writing to file] " << fail_record;  // Debug print
             fail_log_file << fail_record;
         }
 
         fail_log_file.close();
-        manage_fail_log_size(fail_log_filename, 10);
+        manage_fail_log_size(fail_log_filename, max_failed_log_cache);
     }
+
 }
 std::string extract_mode_text(const std::string& input_text)
 {
@@ -635,7 +788,7 @@ void print_control_packet(const ControlPacket_t* pkt) {
 
     // 打印 Flag 3
     printf("  Flag 3:\n");
-    printf("    Reserved[%d]: 0x%02X\n", pkt->flag3.reserved);
+    printf("    Reserved: 0x%02X\n", pkt->flag3.reserved);
     
 
     // 打印 data 資料
@@ -688,10 +841,11 @@ void write_controlboard_set_time(){
 }
 void read_controlboard_data_thread(){
     speed_t speed = B115200;
-    int vtime = 0;
+    int vtime = 5;
     int received_bytes = 0;
     int expected_bytes = 40;
     while(1) {
+        //printf("In file: %s, function: %s, line: %d\n", __FILE__, __func__, __LINE__);
         uint8_t *receive = uart_read(CONTROL_UART2_PATH, speed, vtime, expected_bytes, received_bytes);
         if (receive != NULL) {
             // 將讀取到的資料加入到緩衝區
@@ -711,6 +865,7 @@ void read_controlboard_data_thread(){
                 if (control_board_buffer[i] == 0x55 && control_board_buffer[i + 1] == 0xAA) {
                     uint8_t len = control_board_buffer[i + 2];  // 根據協議獲取封包長度
                     if (i + len > control_board_buffer_len) {
+                        printf("uart data to low\n\r");
                         // 如果資料長度不足，跳出來等待更多資料
                         break;
                     }
@@ -732,10 +887,30 @@ void read_controlboard_data_thread(){
                                     page31_received = true;
                                     for (int i = 0; i < 8; i++) {
                                         uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
+                                        if (pkt->flag2.sw1_setting) {
+                                            if(value <= 10){
+                                                value = 0;
+                                            }
+                                        }
+                                        else{
+                                            if(value <= 6){
+                                                value = 0;
+                                            }
+                                        }
                                         ct_current_data_list1[1][i] = format_current_value(value);
                                     }
                                     for (int i = 8; i < 12; i++) {
                                         uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
+                                        if (pkt->flag2.sw2_setting) {
+                                            if(value <= 10){
+                                                value = 0;
+                                            }
+                                        }
+                                        else{
+                                            if(value <= 6){
+                                                value = 0;
+                                            }
+                                        }
                                         ct_current_data_list2[1][i - 8] = format_current_value(value);
                                     }
                                 }
@@ -743,10 +918,30 @@ void read_controlboard_data_thread(){
                                     page32_received = true;
                                     for (int i = 0; i < 6; i++) {
                                         uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
+                                        if (pkt->flag2.sw2_setting) {
+                                            if(value <= 10){
+                                                value = 0;
+                                            }
+                                        }
+                                        else{
+                                            if(value <= 6){
+                                                value = 0;
+                                            }
+                                        }
                                         ct_current_data_list2[1][i + 4] = format_current_value(value);
                                     }
                                     for (int i = 6; i < 12; i++) {
                                         uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
+                                        if (pkt->flag2.sw3_setting) {
+                                            if(value <= 10){
+                                                value = 0;
+                                            }
+                                        }
+                                        else{
+                                            if(value <= 6){
+                                                value = 0;
+                                            }
+                                        }
                                         ct_current_data_list3[1][i - 6] = format_current_value(value);
                                     }
                                 }
@@ -754,13 +949,24 @@ void read_controlboard_data_thread(){
                                     page33_received = true;
                                     for (int i = 0; i < 6; i++) {
                                         uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
+                                        if (pkt->flag2.sw3_setting) {
+                                            if(value <= 10){
+                                                value = 0;
+                                            }
+                                        }
+                                        else{
+                                            if(value <= 6){
+                                                value = 0;
+                                            }
+                                        }
                                         ct_current_data_list3[1][i + 6] = format_current_value(value);
                                     }
                                     std::cout << "Time: "
-                                                << "Hour: " << pkt->data[12] << ", "
-                                                << "Min: " << pkt->data[13] << ", "
-                                                << "Sec: " << pkt->data[14] << std::endl;
-                                    std::cout << "Version: " << pkt->data[24] << std::endl;
+                                            << "Hour: " << static_cast<int>(pkt->data[12]) << ", "
+                                            << "Min: " << static_cast<int>(pkt->data[13]) << ", "
+                                            << "Sec: " << static_cast<int>(pkt->data[14]) << std::endl;
+
+                                    std::cout << "Version: " << static_cast<int>(pkt->data[23]) << std::endl;
                                     std::string time_str = get_current_time_string();
                                     int hour, minute, second;
                                     
@@ -777,7 +983,7 @@ void read_controlboard_data_thread(){
                                         if (time_diff >= 60) {
                                             std::cout << "Time difference = " << time_diff << " seconds. Syncing time..." << std::endl;
                                     
-                                            // 呼叫你自己實作的校時函式
+                                        
                                             write_controlboard_set_time();
                                         }
                                     } else {
@@ -837,6 +1043,22 @@ void read_controlboard_data_thread(){
         
         free(receive);
     }
+}
+void buzzer_on_button_click() {
+    std::thread(beep).detach();
+}
+void beep() {
+    gpio_output(GPIO_PATH, BUZZER_GPIO, 1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(15));  // 延遲 15ms
+    gpio_output(GPIO_PATH, BUZZER_GPIO, 0);
+}
+void WIFI_reset() {
+    gpio_output(GPIO_PATH, 96, 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(15));  // 延遲 15ms
+    gpio_output(GPIO_PATH, 96, 1);
+}
+void WIFI_reset_thread() {
+    std::thread(WIFI_reset).detach();
 }
 void update_state(PageState *state, TimeSettingState new_state, const DateTime& current_time) {
     if (!state->initialized) {
@@ -1413,6 +1635,7 @@ int main(int argc, char** argv)
     });
     ct_next_data_button->on_click([&](egt::Event &)
     {
+        buzzer_on_button_click();
         switch(current_ct_group) {
             case 0:
                 if(current_ct_item < 7) {
@@ -1607,7 +1830,7 @@ int main(int argc, char** argv)
         ct_top_box.add(ct_status6);
         ct_top_box.add(ct_status7);
         ct_top_box.add(ct_status8);
-        ct_status1->image(egt::Image("file:image/green_rectangle.png"));
+        ct_status1->image(egt::Image("file:image/white_rectangle.png"));
         ct_status2->image(egt::Image("file:image/white_rectangle.png"));
         ct_status3->image(egt::Image("file:image/white_rectangle.png"));
         ct_status4->image(egt::Image("file:image/white_rectangle.png"));
@@ -1615,6 +1838,9 @@ int main(int argc, char** argv)
         ct_status6->image(egt::Image("file:image/white_rectangle.png"));
         ct_status7->image(egt::Image("file:image/white_rectangle.png"));
         ct_status8->image(egt::Image("file:image/white_rectangle.png"));
+        if(ct_current_data_list1[1][current_ct_item] != "0.00 A"){
+            ct_status1->image(egt::Image("file:image/green_rectangle.png"));
+        }
         std::string ct_label_text = extract_mode_text(item1_mode_text);
         ct_mode_label->text(ct_label_text);
         current_time = get_current_time();
@@ -1645,8 +1871,7 @@ int main(int argc, char** argv)
         ct_top_box.add(ct_status8);
         ct_top_box.add(ct_status9);
         ct_top_box.add(ct_status10);
-        
-        ct_status1->image(egt::Image("file:image/green_rectangle.png"));
+        ct_status1->image(egt::Image("file:image/white_rectangle.png"));
         ct_status2->image(egt::Image("file:image/white_rectangle.png"));
         ct_status3->image(egt::Image("file:image/white_rectangle.png"));
         ct_status4->image(egt::Image("file:image/white_rectangle.png"));
@@ -1656,6 +1881,9 @@ int main(int argc, char** argv)
         ct_status8->image(egt::Image("file:image/white_rectangle.png"));
         ct_status9->image(egt::Image("file:image/white_rectangle.png"));
         ct_status10->image(egt::Image("file:image/white_rectangle.png"));
+        if(ct_current_data_list2[1][current_ct_item] != "0.00 A"){
+            ct_status1->image(egt::Image("file:image/green_rectangle.png"));
+        }
         std::string ct_label_text = extract_mode_text(item2_mode_text);
         ct_mode_label->text(ct_label_text);
         current_time = get_current_time();
@@ -1688,7 +1916,7 @@ int main(int argc, char** argv)
         ct_top_box.add(ct_status10);
         ct_top_box.add(ct_status11);
         ct_top_box.add(ct_status12);
-        ct_status1->image(egt::Image("file:image/green_rectangle.png"));
+        ct_status1->image(egt::Image("file:image/white_rectangle.png"));
         ct_status2->image(egt::Image("file:image/white_rectangle.png"));
         ct_status3->image(egt::Image("file:image/white_rectangle.png"));
         ct_status4->image(egt::Image("file:image/white_rectangle.png"));
@@ -1700,6 +1928,9 @@ int main(int argc, char** argv)
         ct_status10->image(egt::Image("file:image/white_rectangle.png"));
         ct_status11->image(egt::Image("file:image/white_rectangle.png"));
         ct_status12->image(egt::Image("file:image/white_rectangle.png"));
+        if(ct_current_data_list3[1][current_ct_item] != "0.00 A"){
+            ct_status1->image(egt::Image("file:image/green_rectangle.png"));
+        }
         std::string ct_label_text = extract_mode_text(item3_mode_text);
         ct_mode_label->text(ct_label_text);
         current_time = get_current_time();
@@ -2007,18 +2238,18 @@ int main(int argc, char** argv)
             
             if (network_ok)
             {
-                title_right_box.remove_all();
-                title_right_box.add(right(clouda_button));
-                title_right_box.add(right(wifi_button));
-                title_right_box.add(right(power_button));
+                clouda_button->image(egt::Image("icon:clouda.png;64"));
                 
             }
             else
             {
-                title_right_box.remove_all();
-                title_right_box.add(right(netork_warning_button));
-                title_right_box.add(right(wifi_button));
-                title_right_box.add(right(power_button));
+                clouda_button->image(egt::Image("icon:warning.png;64"));
+            }
+            if(wifi_reset_blocked){
+                wifi_button->image(egt::Image("icon:cancel.png;64"));
+            }
+            else{
+                wifi_button->image(egt::Image("icon:wifi.png;64"));
             }
             busy = false;    
 

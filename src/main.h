@@ -29,19 +29,25 @@
 #include "sd.h"
 #include "gpio.h"
 #include "math.h"
-
+#include "adc.h"
 #define PROJECT_NAME "holystone_ame"
-#define VERSION "v1.6"
+#define VERSION "v1.7"
 #define CONTROL_BOARD_BUFFER_SIZE 1024  // 緩衝區大小
 #define CONTROL_BOARD_MAX_PACKET_SIZE 64     // 假設最大封包大小
 
 uint8_t control_board_buffer[CONTROL_BOARD_BUFFER_SIZE];  // 用來儲存從 UART 讀取的資料
 size_t control_board_buffer_len = 0;  // 當前緩衝區的資料長度
 
+const char* GPIO_PATH = "/dev/gpiochip0";
+const char* RTC_BAT_PATH = "/sys/bus/iio/devices/iio:device0/in_voltage6_raw";
 const char* WIFI_UART1_PATH = "/dev/ttyS1";
 const char* CONTROL_UART2_PATH = "/dev/ttyS2";
 const std::string sd_device = "/dev/mmcblk0p1";
 const std::string mount_point = "/mnt/sd";
+int BUZZER_GPIO = 76;
+int WIFI_RESET_GPIO = 87;
+int CONNTEC_GPIO = 95;
+int SYSTEM_LED_GPIO = 96;
 std::mutex fail_log_mutex;
 std::mutex log_mutex;
 std::mutex ct_data_mutex;
@@ -51,7 +57,7 @@ using namespace egt;
 bool page31_received = false;
 bool page32_received = false;
 bool page33_received = false;
-bool has_ct_data = true;
+bool has_ct_data = false;
 int current_ct_group;
 int current_ct_item;
 std::vector<std::vector<std::string>> ct_current_data_list1 = {
@@ -91,6 +97,17 @@ typedef struct {
     TimeSettingState previous;
     bool initialized;
 } PageState;
+enum TransmitResult {
+    TRANSMIT_OK = 1,                            // 傳送成功
+    TRANSMIT_SEND_FAIL = -1,                    // 傳送失敗
+    TRANSMIT_CHECKSUM_ERROR = -2,               // CRC 錯誤
+    TRANSMIT_WIFI_ERROR_NOT_INIT = -11,         // Wi-Fi 未初始化
+    TRANSMIT_WIFI_ERROR_NOT_STARTED = -12,      // Wi-Fi 未啟動
+    TRANSMIT_WIFI_ERROR_NOT_CONNECTED = -13,    // Wi-Fi 未連接 AP
+    TRANSMIT_WIFI_ERROR_INVALID_ARG = -14,      // 無效參數
+    TRANSMIT_WIFI_ERROR_UNKNOWN = -15,          // 未知 Wi-Fi 錯誤
+    TRANSMIT_UNKNOWN_RESPONSE = -4              // 回應不明
+};
 typedef struct __attribute__((packed)) {
     uint8_t ct_num;
     uint8_t function;
@@ -175,6 +192,8 @@ typedef struct __attribute__((packed)) {
     uint8_t tail;             // 0x00
 } SetTime_ControlPacket_t;
 
+void buzzer_on_button_click(void);
+void beep(void);
 std::string format_current_value(uint16_t value);
 void update_state(PageState *state, TimeSettingState new_state, const DateTime& current_time);
 void write_controlboard_set_time(void);
@@ -185,6 +204,8 @@ void send_ct_log_towifi_loop(const std::string& fail_log_filename, int log_reten
 void resned_ct_log_towifi_loop(const std::string& fail_log_filename, int wifi_batch_size);
 void resend_wifi_FailedLog(const std::string& fail_log_filename, int wifi_batch_size);
 int uartTransmitCurrentToWiFi(int ct_num, float current);
+void WIFI_reset(void);
+void WIFI_reset_thread(void);
 int copy_csv_to_sd(const std::string& target_dir);
 std::string get_current_date_string(void);
 std::string get_current_time_string(void);

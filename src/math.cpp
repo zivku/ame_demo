@@ -23,6 +23,7 @@ uint16_t calculate_crc16(const uint8_t* data, size_t length, uint16_t crc) {
     }
     return crc;
 }
+
 uint8_t calculate_simple_checksum(const uint8_t* data, size_t length) {
     uint32_t sum = 0;
     for (size_t i = 0; i < length; ++i) {
