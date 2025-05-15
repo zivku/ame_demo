@@ -4,6 +4,7 @@
 #include <stdint.h>  // 用于 uint8_t 类型
 #include <termios.h> // 用于 speed_t 类型
 #include <stdlib.h>
+#include <cstring>
 
 // 定义 UART 缓冲区大小
 #define BUF_SIZE 128

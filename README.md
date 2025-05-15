@@ -39,9 +39,27 @@
      <li>1. [INFO]增加GPIO路徑變數，新增adc.c與adc.h作為電池ADC讀值用</li>   
      <li>2. [INFO]增加buzzer_on_button_click(void);和beep(void);作為螢幕按鈕的回饋音</li> 
 </ul>
+
 5/6 v1.7更新內容 : <br>    
 <ul>
      <li>1. [debug]resend_wifi_FailedLog中補傳機制當初寫測試時跟上傳用到同一組UART(已解決)</li>   
      <li>2. [INFO]加入last_wifi_reset_time、WIFI_RESET_COOLDOWN(5)、wifi_reset_attempts、WIFI_RESET_RETRY_LIMIT、wifi_reset_blocked五個變數應用在log_current_data function中作為WIFI連線異常時reset工作用</li>
      <li>3. [INFO]在network_timer.on_timeout中加入對wifi_reset_blocked的判斷決定是否改變WIFI圖樣</li>  
+</ul>
+
+5/7 v1.8更新內容 : <br>     
+<ul>
+     <li>1. [INFO]加入voltage_to_status()判斷當前電壓切換battery_label的圖片三段變化</li>    
+     <li>2. [INFO]增加CT_group1_status、CT_group2_status、CT_group3_status來判斷驅動板目前讀取的電流是50A或30A的模式</li>     
+      
+</ul>
+
+5/15 v1.9更新內容 : <br>      
+<ul>
+     <li>1. [INFO]config.ini中加入backlight_sleep_timer與backlight_sleep_level兩個變數作為背光條暗的時間以及條暗的階度</li>     
+     <li>2. [INFO]增加bool set_brightness(int level);function作為調光使用</li>
+     <li>3. [INFO]再main中增加backlight_timer.on_timeout與win.on_event監控畫面所有的觸摸事件決定使否把背光調暗</li>   
+     <li>4. [INFO]修改update_wifi_page可以在wifi頁面確認目前連線狀態以及新增一個reset WIFI按鈕</li>  
+     <li>5. [INFO]新增power_button的長壓邏輯，長按超過設定時間後關閉系統</li>
+      
 </ul>

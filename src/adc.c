@@ -1,5 +1,5 @@
 #include "adc.h"
-float adc(char* adc_path)
+float adc(const char* adc_path)
 {
     static int readings[WINDOW_SIZE] = {0};
     static int index = 0;
@@ -7,7 +7,7 @@ float adc(char* adc_path)
 
     int fd, ret = 0;
     char buf[6] = "";
-    float scale = 0.201416015;
+    float scale = 0.201416015 / 1000.0;
 
     fd = open(adc_path, O_RDONLY, 0);
     if (fd < 0)

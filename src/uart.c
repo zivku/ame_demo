@@ -18,6 +18,7 @@ uint8_t* uart_transmit(const char* DEV_PATH, speed_t baudRate, int vtime, uint8_
     int ret;
     received_bytes = 0;
     uint8_t* rx_data = new uint8_t[BUF_SIZE];
+    memset(rx_data, 0, BUF_SIZE);
     struct termios options;
     /* open uart */
     fd = open(DEV_PATH, O_RDWR | O_NOCTTY);
@@ -48,9 +49,31 @@ uint8_t* uart_transmit(const char* DEV_PATH, speed_t baudRate, int vtime, uint8_
     if (ret != tx_len) {
         printf("ERROR write ret=%d\n", ret);
     }
-    while ((ret = read(fd, rx_data, BUF_SIZE - 1)) > 0) {
-        received_bytes += ret;
+    int total = 0;
+    while (total < BUF_SIZE - 1)
+    {
+        uint8_t byte;
+        ret = read(fd, &byte, 1);
+        if (ret > 0)
+        {
+            rx_data[total++] = byte;
+            // 若你有明確結尾符號，可加條件提早結束：
+            if (byte == '\n') break;
+        }
+        else if (ret == 0)
+        {
+            // timeout reached
+            break;
+        }
+        else
+        {
+            perror("read");
+            break;
+        }
     }
+
+    received_bytes = total;
+    rx_data[total] = '\0'; // 保險 null-terminate（只對純文字適用）
     close(fd);
     return rx_data;
     

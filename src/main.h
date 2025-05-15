@@ -31,7 +31,7 @@
 #include "math.h"
 #include "adc.h"
 #define PROJECT_NAME "holystone_ame"
-#define VERSION "v1.7"
+#define VERSION "v1.9"
 #define CONTROL_BOARD_BUFFER_SIZE 1024  // 緩衝區大小
 #define CONTROL_BOARD_MAX_PACKET_SIZE 64     // 假設最大封包大小
 
@@ -45,7 +45,7 @@ const char* CONTROL_UART2_PATH = "/dev/ttyS2";
 const std::string sd_device = "/dev/mmcblk0p1";
 const std::string mount_point = "/mnt/sd";
 int BUZZER_GPIO = 76;
-int WIFI_RESET_GPIO = 87;
+int WIFI_RESET_GPIO = 86;
 int CONNTEC_GPIO = 95;
 int SYSTEM_LED_GPIO = 96;
 std::mutex fail_log_mutex;
@@ -58,19 +58,26 @@ bool page31_received = false;
 bool page32_received = false;
 bool page33_received = false;
 bool has_ct_data = false;
+bool CT_group1_status = false;
+bool CT_group2_status = false;
+bool CT_group3_status = false;
 int current_ct_group;
 int current_ct_item;
+std::string wifi_status_text = "WiFi status not set";
+bool wifi_reset_status = true;
+bool backlight_status = false;
+
 std::vector<std::vector<std::string>> ct_current_data_list1 = {
     {"CT1", "CT2", "CT3","CT4","CT5","CT6","CT7","CT8"},
-    {"11.1 A", "11.2 A", "11.3 A", "11.4 A", "11.5 A", "11.6 A", "11.7 A", "11.8 A"}
+    {"0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A"}
 };
 std::vector<std::vector<std::string>> ct_current_data_list2 = {
     {"CT9", "CT10", "CT11","CT12","CT13","CT14","CT15","CT16","CT17","CT18"},
-    {"21.1 A", "21.2 A", "21.3 A", "21.4 A", "21.5 A", "21.6 A", "21.7 A", "21.8 A", "21.9 A", "22.0 A"}
+    {"0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A"}
 };
 std::vector<std::vector<std::string>> ct_current_data_list3 = {
     {"CT19", "CT20", "CT21","CT22","CT23","CT24","CT25","CT26","CT27","CT28","CT29","CT30"},
-    {"31.1 A", "31.2 A", "31.3 A", "31.4 A", "31.5 A", "31.6 A", "31.7 A", "31.8 A", "31.9 A", "32.0 A", "32.1 A", "32.2 A"}
+    {"0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A"}
 };
 typedef struct {
     int log_time_delay = 5;           // 日誌延遲時間 (預設值)
@@ -78,6 +85,9 @@ typedef struct {
     int network_detection_delay = 1;  // 網絡檢測延遲時間 (預設值)
     int wifi_batch_size = 30;         // WiFi 批次大小 (預設值)
     int max_failed_log_cache = 10;
+    int backlight_sleep_timer = 30;
+    int backlight_sleep_level = 6;
+    int poweroff_timer = 2;
 } config_t;
 enum class TIMESET_TYPE { DATE, TIME };
 struct DateTime {
@@ -88,6 +98,11 @@ struct DateTime {
     int minute;
     int second;
 };
+typedef enum {
+    STATUS_EMPTY,
+    STATUS_LOW,
+    STATUS_NORMAL
+} VoltageStatus;
 typedef enum {
     NOT_IN_TIME_SETTING,
     IN_TIME_SETTING
@@ -192,6 +207,9 @@ typedef struct __attribute__((packed)) {
     uint8_t tail;             // 0x00
 } SetTime_ControlPacket_t;
 
+bool set_brightness(int level);
+uint16_t calibrate_current(uint16_t value, bool sw3_setting, bool ct_group3_status);
+VoltageStatus voltage_to_status(float voltage);
 void buzzer_on_button_click(void);
 void beep(void);
 std::string format_current_value(uint16_t value);

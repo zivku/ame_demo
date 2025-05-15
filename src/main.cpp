@@ -418,6 +418,7 @@ void log_current_data(const std::string& filename, const std::string& fail_log_f
             auto now = std::chrono::steady_clock::now();
             switch (uart_to_wifi_ret) {
                 case TRANSMIT_OK:
+                    wifi_status_text = "Connected";
                     // 成功，不需要額外處理
                     wifi_reset_blocked = false;
                     wifi_reset_attempts = 0;
@@ -434,6 +435,7 @@ void log_current_data(const std::string& filename, const std::string& fail_log_f
                     break;
             
                 case TRANSMIT_WIFI_ERROR_NOT_INIT:
+                    wifi_status_text = "Connection failed";
                     if (!wifi_reset_blocked && now - last_wifi_reset_time > WIFI_RESET_COOLDOWN) {
                         std::cerr << "[NOT_INIT] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
                         WIFI_reset_thread();
@@ -450,6 +452,7 @@ void log_current_data(const std::string& filename, const std::string& fail_log_f
                     failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", WiFi error: " + std::to_string(uart_to_wifi_ret) + "\n");
                     break;
                 case TRANSMIT_WIFI_ERROR_NOT_STARTED:
+                    wifi_status_text = "Not Started";
                     if (!wifi_reset_blocked && now - last_wifi_reset_time > WIFI_RESET_COOLDOWN) {
                         std::cerr << "[NOT_STARTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
                         WIFI_reset_thread();
@@ -466,6 +469,7 @@ void log_current_data(const std::string& filename, const std::string& fail_log_f
                     failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", WiFi error: " + std::to_string(uart_to_wifi_ret) + "\n");
                     break;
                 case TRANSMIT_WIFI_ERROR_NOT_CONNECTED:
+                    wifi_status_text = "Connection failed";
                     if (!wifi_reset_blocked && now - last_wifi_reset_time > WIFI_RESET_COOLDOWN) {
                         std::cerr << "[NOT_CONNECTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
                         WIFI_reset_thread();
@@ -482,6 +486,7 @@ void log_current_data(const std::string& filename, const std::string& fail_log_f
                     failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", WiFi error: " + std::to_string(uart_to_wifi_ret) + "\n");
                     break;
                 case TRANSMIT_WIFI_ERROR_INVALID_ARG:
+                    wifi_status_text = "Connection failed";
                     if (!wifi_reset_blocked && now - last_wifi_reset_time > WIFI_RESET_COOLDOWN) {
                         std::cerr << "[NOT_CONNECTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
                         WIFI_reset_thread();
@@ -498,11 +503,13 @@ void log_current_data(const std::string& filename, const std::string& fail_log_f
                     failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", WiFi error: " + std::to_string(uart_to_wifi_ret) + "\n");
                     break;
                 case TRANSMIT_WIFI_ERROR_UNKNOWN:
+                    wifi_status_text = "Connection failed";
                     std::cerr << "Wi-Fi error occurred. Logging for retry.\n";
                     failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", WiFi error: " + std::to_string(uart_to_wifi_ret) + "\n");
                     break;
             
                 case TRANSMIT_UNKNOWN_RESPONSE:
+                    wifi_status_text = "Connection failed";
                     if (!wifi_reset_blocked && now - last_wifi_reset_time > WIFI_RESET_COOLDOWN) {
                         std::cerr << "[NOT_CONNECTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
                         WIFI_reset_thread();
@@ -654,52 +661,67 @@ void handle_wifi_selection(const std::string& device, egt::ScrolledView& scrollv
     });
 
 }
+static std::shared_ptr<egt::Label> label_status;
 void update_wifi_page(egt::VerticalBoxSizer& main_box, egt::VerticalBoxSizer& wifi_main_box, egt::ScrolledView& scrollview, egt::PopupVirtualKeyboard& popup_keyboard)
 {
     // SCAN WIFI
-    std::vector<std::string> devices = scan_wifi_devices();
+    //std::vector<std::string> devices = scan_wifi_devices();
 
     wifi_main_box.remove_all();
     popup_keyboard.hide();
-    int item_index = 1;
-    for (const auto& device : devices)
-    {
-        auto hbox = std::make_shared<egt::HorizontalBoxSizer>(egt::Justification::justify);
-        hbox->border(1);
-        hbox->color(egt::Palette::ColorId::border, egt::Palette::gray);
-        auto label_item = std::make_shared<egt::Label>("Item" + std::to_string(item_index));        
-        label_item->font(egt::Font("Times New Roman", 16, egt::Font::Weight::bold));
-        label_item->color(egt::Palette::ColorId::label_text, egt::Palette::black);
-        hbox->add(expand(label_item));
-        
-        auto btn = std::make_shared<egt::Button>(device);
-        btn->font(egt::Font("Times New Roman", 16, egt::Font::Weight::bold));
-        btn->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent);
-        btn->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent, egt::Palette::GroupId::active);
-        btn->color(egt::Palette::ColorId::button_text, egt::Palette::black);
-        btn->color(egt::Palette::ColorId::button_text, egt::Palette::black, egt::Palette::GroupId::active);
-        btn->padding(5);
-        hbox->add(expand(btn));
 
-        auto label_status = std::make_shared<egt::Label>("Connection Failed");
-        label_status->font(egt::Font("Times New Roman", 16, egt::Font::Weight::bold));
-        label_status->color(egt::Palette::ColorId::label_text, egt::Palette::red);
-        hbox->add(expand(label_status));
+    auto hbox = std::make_shared<egt::HorizontalBoxSizer>(egt::Justification::justify);
+    hbox->border(1);
+    hbox->color(egt::Palette::ColorId::border, egt::Palette::gray);
+    // auto label_item = std::make_shared<egt::Label>("Item" + std::to_string(item_index));        
+    // label_item->font(egt::Font("Times New Roman", 32, egt::Font::Weight::bold));
+    // label_item->color(egt::Palette::ColorId::label_text, egt::Palette::black);
+    // hbox->add(expand(label_item));
+    
+    auto wifi_status_label = std::make_shared<egt::Label>("WiFi Status");
+    wifi_status_label->font(egt::Font("Times New Roman", 24, egt::Font::Weight::bold));
+    // btn->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent);
+    // btn->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent, egt::Palette::GroupId::active);
+    wifi_status_label->color(egt::Palette::ColorId::button_text, egt::Palette::black);
+    wifi_status_label->color(egt::Palette::ColorId::button_text, egt::Palette::black, egt::Palette::GroupId::active);
+    wifi_status_label->padding(5);
+    hbox->add(expand(wifi_status_label));
 
-        btn->on_click([device, &scrollview, &popup_keyboard](egt::Event & event)
-        {
-            handle_wifi_selection(device, scrollview, popup_keyboard);
-        });
-        hbox->resize(egt::Size(790, 68));
-        wifi_main_box.add((hbox));
-        item_index++;
-    }
+    label_status = std::make_shared<egt::Label>(wifi_status_text);
+    label_status->font(egt::Font("Times New Roman", 24, egt::Font::Weight::bold));
+    label_status->color(egt::Palette::ColorId::label_text, egt::Palette::red);
+    hbox->add(expand(label_status));
+
+    auto wifi_toggle = std::make_shared<egt::ToggleBox>();
+    wifi_toggle->toggle_text("OFF", "ON");
+    wifi_toggle->font(Font("Times New Roman", 24));
+    wifi_toggle->resize(Size(150, 64));
+    wifi_toggle->checked(true); 
+    hbox->add(expand(wifi_toggle));
+
+    hbox->resize(egt::Size(790, 100));
+    wifi_main_box.add((hbox));
     
     scrollview.remove_all();
     scrollview.add(expand(wifi_main_box)); 
     scrollview.resize(egt::Size(800, 400));
 
     main_box.add(expand(scrollview));
+
+    wifi_toggle->on_event([&](const egt::Event& event){
+        if (event.id() == egt::EventId::pointer_click){
+            buzzer_on_button_click();
+
+            if (wifi_reset_status) {
+                wifi_reset_status = false;
+                gpio_output(GPIO_PATH, WIFI_RESET_GPIO, 0);
+            } else {
+                wifi_reset_status = true;
+                gpio_output(GPIO_PATH, WIFI_RESET_GPIO, 1);
+            }
+        }
+    });
+    
 }
 void send_ct_log_towifi_loop(const std::string& fail_log_filename, int log_retention_days, int max_failed_log_cache) {
     while (true) {
@@ -810,7 +832,7 @@ void write_controlboard_set_time(){
     SetTime_ControlPacket_t packet;
     packet.start = 0xAA55;                // little-endian：實際送出為 0x55 0xAA
     packet.length = 0x11;                 // 資料長度
-    packet.host_id = 0x5BB2;             // 主機 ID（low byte 0x5B, high byte 0xB2）
+    packet.host_id = 0xBF64;             // 主機 ID（low byte 0x5B, high byte 0xB2）
     packet.customer_code = 0x03;
     packet.model_code = 0x29;
     packet.signal_mode = 0xB9;
@@ -838,6 +860,31 @@ void write_controlboard_set_time(){
     speed_t speed = B115200;
     int vtime = 0;
     uart_write(CONTROL_UART2_PATH, speed, vtime, reinterpret_cast<uint8_t*>(&packet), sizeof(SetTime_ControlPacket_t));
+}
+uint16_t calibrate_current(uint16_t value, bool sw3_setting, bool ct_group3_status)
+{
+    uint32_t result = value;
+
+    if (sw3_setting)
+    {
+        if (!ct_group3_status)
+            result = (result * 1000) / 1667;
+
+        // 30A 模式下的雜訊濾除門檻
+        if (result <= (ct_group3_status ? 11 : 7))
+            return 0;
+    }
+    else
+    {
+        if (ct_group3_status)
+            result = (result * 1667) / 1000;
+
+        // 50A 模式下的雜訊濾除門檻
+        if (result <= (ct_group3_status ? 11 : 7))
+            return 0;
+    }
+
+    return static_cast<uint16_t>(result);
 }
 void read_controlboard_data_thread(){
     speed_t speed = B115200;
@@ -887,30 +934,12 @@ void read_controlboard_data_thread(){
                                     page31_received = true;
                                     for (int i = 0; i < 8; i++) {
                                         uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
-                                        if (pkt->flag2.sw1_setting) {
-                                            if(value <= 10){
-                                                value = 0;
-                                            }
-                                        }
-                                        else{
-                                            if(value <= 6){
-                                                value = 0;
-                                            }
-                                        }
+                                        value = calibrate_current(value, pkt->flag2.sw1_setting, CT_group1_status);
                                         ct_current_data_list1[1][i] = format_current_value(value);
                                     }
                                     for (int i = 8; i < 12; i++) {
                                         uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
-                                        if (pkt->flag2.sw2_setting) {
-                                            if(value <= 10){
-                                                value = 0;
-                                            }
-                                        }
-                                        else{
-                                            if(value <= 6){
-                                                value = 0;
-                                            }
-                                        }
+                                        value = calibrate_current(value, pkt->flag2.sw2_setting, CT_group2_status);
                                         ct_current_data_list2[1][i - 8] = format_current_value(value);
                                     }
                                 }
@@ -918,30 +947,12 @@ void read_controlboard_data_thread(){
                                     page32_received = true;
                                     for (int i = 0; i < 6; i++) {
                                         uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
-                                        if (pkt->flag2.sw2_setting) {
-                                            if(value <= 10){
-                                                value = 0;
-                                            }
-                                        }
-                                        else{
-                                            if(value <= 6){
-                                                value = 0;
-                                            }
-                                        }
+                                        value = calibrate_current(value, pkt->flag2.sw2_setting, CT_group2_status);
                                         ct_current_data_list2[1][i + 4] = format_current_value(value);
                                     }
                                     for (int i = 6; i < 12; i++) {
                                         uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
-                                        if (pkt->flag2.sw3_setting) {
-                                            if(value <= 10){
-                                                value = 0;
-                                            }
-                                        }
-                                        else{
-                                            if(value <= 6){
-                                                value = 0;
-                                            }
-                                        }
+                                        value = calibrate_current(value, pkt->flag2.sw3_setting, CT_group3_status);
                                         ct_current_data_list3[1][i - 6] = format_current_value(value);
                                     }
                                 }
@@ -949,16 +960,7 @@ void read_controlboard_data_thread(){
                                     page33_received = true;
                                     for (int i = 0; i < 6; i++) {
                                         uint16_t value = pkt->data[0 + i * 2] * 256 + pkt->data[1 + i * 2];
-                                        if (pkt->flag2.sw3_setting) {
-                                            if(value <= 10){
-                                                value = 0;
-                                            }
-                                        }
-                                        else{
-                                            if(value <= 6){
-                                                value = 0;
-                                            }
-                                        }
+                                        value = calibrate_current(value, pkt->flag2.sw3_setting, CT_group3_status);
                                         ct_current_data_list3[1][i + 6] = format_current_value(value);
                                     }
                                     std::cout << "Time: "
@@ -1053,12 +1055,25 @@ void beep() {
     gpio_output(GPIO_PATH, BUZZER_GPIO, 0);
 }
 void WIFI_reset() {
-    gpio_output(GPIO_PATH, 96, 0);
+    gpio_output(GPIO_PATH, WIFI_RESET_GPIO, 0);
     std::this_thread::sleep_for(std::chrono::milliseconds(15));  // 延遲 15ms
-    gpio_output(GPIO_PATH, 96, 1);
+    gpio_output(GPIO_PATH, WIFI_RESET_GPIO, 1);
 }
 void WIFI_reset_thread() {
     std::thread(WIFI_reset).detach();
+}
+bool set_brightness(int level){
+    if (level < 0 || level > 7)
+        return false;
+
+    const std::string path = "/sys/devices/platform/backlight/backlight/backlight/brightness";
+    std::ofstream brightness_file(path);
+    if (!brightness_file.is_open())
+        return false;
+
+    brightness_file << level;
+    brightness_file.close();
+    return true;
 }
 void update_state(PageState *state, TimeSettingState new_state, const DateTime& current_time) {
     if (!state->initialized) {
@@ -1077,6 +1092,14 @@ void update_state(PageState *state, TimeSettingState new_state, const DateTime& 
         write_controlboard_set_time();
     }
 }
+VoltageStatus voltage_to_status(float voltage){
+    if (voltage < 2.8)
+        return STATUS_EMPTY;
+    else if (voltage < 3.0)
+        return STATUS_LOW;
+    else
+        return STATUS_NORMAL;
+}
 int main(int argc, char** argv)
 {
     PageState page_state = {NOT_IN_TIME_SETTING, NOT_IN_TIME_SETTING, false};
@@ -1092,6 +1115,9 @@ int main(int argc, char** argv)
         cfg.network_detection_delay = std::stoi(config.get("parameter", "network_detection_delay"));
         cfg.wifi_batch_size = std::stoi(config.get("parameter", "wifi_batch_size"));
         cfg.max_failed_log_cache = std::stoi(config.get("parameter", "max_failed_log_cache"));
+        cfg.backlight_sleep_timer = std::stoi(config.get("parameter", "backlight_sleep_timer"));
+        cfg.backlight_sleep_level = std::stoi(config.get("parameter", "backlight_sleep_level"));
+        cfg.poweroff_timer = std::stoi(config.get("parameter", "poweroff_timer"));
     }
     egt::TopWindow win;
     OverlayWindow heoWin(egt::Rect(0, 0, 800, 480));
@@ -1132,6 +1158,26 @@ int main(int argc, char** argv)
     home_button->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent, egt::Palette::GroupId::active);
     title_left_box.add(left(home_button));
 
+    auto battery_label = std::make_shared<egt::ImageLabel>(egt::Image("icon:battery.png;64"));
+    title_right_box.add(right(battery_label));
+    float voltage = adc(RTC_BAT_PATH);
+    VoltageStatus status = voltage_to_status(voltage);
+    printf("Voltage: %.3fV\n", voltage);
+    switch (status) {
+        case STATUS_EMPTY:
+            battery_label->image(egt::Image("icon:battery_empty.png;64"));
+            printf("battery status : empty\n");
+            break;
+        case STATUS_LOW:
+            battery_label->image(egt::Image("icon:battery_low.png;64"));
+            printf("battery status : low\n");
+            break;
+        case STATUS_NORMAL:
+            battery_label->image(egt::Image("icon:battery.png;64"));
+            printf("battery status: normal\n");
+            break;
+    }
+
     auto clouda_button = std::make_shared<egt::ImageButton>(egt::Image("icon:clouda.png;64"));
     clouda_button->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent);
     clouda_button->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent, egt::Palette::GroupId::active);
@@ -1147,10 +1193,24 @@ int main(int argc, char** argv)
     power_button->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent, egt::Palette::GroupId::active);
     title_right_box.add(right(power_button));
 
-    auto netork_warning_button = std::make_shared<egt::ImageButton>(egt::Image("icon:warning.png;64"));
-    netork_warning_button->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent);
-    netork_warning_button->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent, egt::Palette::GroupId::active);
-
+    egt::PeriodicTimer poweroff_timer{std::chrono::seconds(cfg.poweroff_timer)};
+    power_button->on_event([&](egt::Event& event) {
+        if (event.id() == egt::EventId::raw_pointer_down)  // 按下事件
+        {
+            poweroff_timer.start();
+            
+        }
+        else if (event.id() == egt::EventId::raw_pointer_up)  // 釋放事件
+        {
+            poweroff_timer.stop();
+        }
+    });
+    poweroff_timer.on_timeout([&]()
+    {
+        buzzer_on_button_click();
+        sync();  // 同步文件系統
+        system("echo mem > /sys/power/state");  // 進入休眠模式
+    });    
     egt::PeriodicTimer network_timer{std::chrono::seconds(cfg.network_detection_delay)};
     //========================title box================================
 
@@ -1202,6 +1262,7 @@ int main(int argc, char** argv)
     group1_toggle1->toggle_text("30A", "50A");
     group1_toggle1->font(Font("Times New Roman", 28));
     group1_toggle1->resize(Size(150, 80));
+    //group1_toggle1->disable();
     page1_bottom_group_box1.add(group1_toggle1);
 
     Button group1_setting_button2("2");
@@ -1213,6 +1274,7 @@ int main(int argc, char** argv)
     group1_toggle2->toggle_text("30A", "50A");
     group1_toggle2->font(Font("Times New Roman", 28));
     group1_toggle2->resize(Size(150, 80));
+    //group1_toggle2->disable();
     page1_bottom_group_box2.add(group1_toggle2);
 
     Button group1_setting_button3("3");
@@ -1224,6 +1286,7 @@ int main(int argc, char** argv)
     group1_toggle3->toggle_text("30A", "50A");
     group1_toggle3->font(Font("Times New Roman", 28));
     group1_toggle3->resize(Size(150, 80));
+    //group1_toggle3->disable();
     page1_bottom_group_box3.add(group1_toggle3);
 
     //========================page1 box================================
@@ -1417,12 +1480,15 @@ int main(int argc, char** argv)
         ct_time_label->text(formatted_time);
         switch(current_ct_group) {
             case 0:
+                //ct_mode_label->text(CT_group1_status ? "50A Mode" : "30A Mode");
                 ct_current_data->text(ct_current_data_list1[1][current_ct_item]);
             break;
             case 1:
+                //ct_mode_label->text(CT_group2_status ? "50A Mode" : "30A Mode");
                 ct_current_data->text(ct_current_data_list2[1][current_ct_item]);
             break;
             case 2:
+                //ct_mode_label->text(CT_group3_status ? "50A Mode" : "30A Mode");
                 ct_current_data->text(ct_current_data_list3[1][current_ct_item]);
             break;
         }
@@ -1815,6 +1881,7 @@ int main(int argc, char** argv)
     });
     group1_setting_button1.on_click([&](egt::Event &)
     {
+        buzzer_on_button_click();
         ct_item_button.text("1");
         current_ct_group = 0;
         current_ct_item = 0;
@@ -1854,6 +1921,7 @@ int main(int argc, char** argv)
     });
     group1_setting_button2.on_click([&](egt::Event &)
     {
+        buzzer_on_button_click();
         ct_item_button.text("2");
         current_ct_group = 1;
         current_ct_item = 0;
@@ -1897,6 +1965,7 @@ int main(int argc, char** argv)
     });
     group1_setting_button3.on_click([&](egt::Event &)
     {
+        buzzer_on_button_click();
         ct_item_button.text("3");
         current_ct_group = 2;
         current_ct_item = 0;
@@ -1942,27 +2011,10 @@ int main(int argc, char** argv)
         main_box.add(expand_horizontal(title_main_box));
         main_box.add(expand(ct_main_box));
     });
-    netork_warning_button->on_event([&](egt::Event &event)
-    {
-        if (event.id() == egt::EventId::raw_pointer_down)
-        {
-            netork_warning_button->image(egt::Image("icon:clouda.png;64"));
-        }
-        else if (event.id() == egt::EventId::raw_pointer_up)
-        {
-            netork_warning_button->image(egt::Image("icon:warning.png;64"));
-        }
-    }, {egt::EventId::raw_pointer_down, egt::EventId::raw_pointer_up});
-    netork_warning_button->on_click([&](egt::Event &)
-    {
-        main_box.remove_all();
-        wifi_toggle->hide();
-        main_box.add(expand_horizontal(title_main_box));
-    });
 
     time_setting_up_button1->on_click([&](egt::Event &)
     {
-        
+        buzzer_on_button_click();
         switch (time_set_type) {
             case TIMESET_TYPE::DATE:
                 if (current_time.year < 2100){
@@ -1991,6 +2043,7 @@ int main(int argc, char** argv)
     });
     time_setting_down_button1->on_click([&](egt::Event &)
     {
+        buzzer_on_button_click();
         switch (time_set_type) {
             case TIMESET_TYPE::DATE:
                 if (current_time.year > 2000) {
@@ -2020,6 +2073,7 @@ int main(int argc, char** argv)
     });
     time_setting_up_button2->on_click([&](egt::Event &)
     {
+        buzzer_on_button_click();
         switch (time_set_type) {
             case TIMESET_TYPE::DATE:
                 if (current_time.month < 12) {
@@ -2048,6 +2102,7 @@ int main(int argc, char** argv)
     });
     time_setting_down_button2->on_click([&](egt::Event &)
     {
+        buzzer_on_button_click();
         switch (time_set_type) {
             case TIMESET_TYPE::DATE:
                 if (current_time.month > 1) {
@@ -2076,6 +2131,7 @@ int main(int argc, char** argv)
     });
     time_setting_up_button3->on_click([&](egt::Event &)
     {
+        buzzer_on_button_click();
         switch (time_set_type) {
             case TIMESET_TYPE::DATE:
                 if (current_time.day < max_days_in_month) {
@@ -2099,6 +2155,7 @@ int main(int argc, char** argv)
     });
     time_setting_down_button3->on_click([&](egt::Event &)
     {
+        buzzer_on_button_click();
         switch (time_set_type) {
             case TIMESET_TYPE::DATE:
                 if (current_time.day > 1) {
@@ -2122,6 +2179,7 @@ int main(int argc, char** argv)
     });
     time_switch_button.on_click([&](egt::Event &)
     {
+        buzzer_on_button_click();
         update_state(&page_state, IN_TIME_SETTING, dummy_time);
         switch (time_set_type) {
             case TIMESET_TYPE::DATE:
@@ -2145,6 +2203,7 @@ int main(int argc, char** argv)
 
     time_setting_button.on_click([&](egt::Event &)
     {
+        buzzer_on_button_click();
         update_state(&page_state, IN_TIME_SETTING, dummy_time);
         current_time = get_current_time();
         max_days_in_month = days_in_month(current_time.year, current_time.month);
@@ -2159,13 +2218,15 @@ int main(int argc, char** argv)
 
     wifi_button->on_click([&](egt::Event &)
     {
+        buzzer_on_button_click();
         main_box.remove_all();
         main_box.add(expand_horizontal(title_main_box));
-        wifi_toggle->show();
+        //wifi_toggle->show();
         update_wifi_page(main_box, wifi_main_box, *scrollview, popup_keyboard);
     });
     home_button->on_click([&](egt::Event &)
     {
+        buzzer_on_button_click();
         update_state(&page_state, NOT_IN_TIME_SETTING, current_time); 
         ct_timer.stop();
         popup_keyboard.hide();
@@ -2174,56 +2235,78 @@ int main(int argc, char** argv)
         main_box.add(expand_horizontal(title_main_box));
         main_box.add(expand(page1_main_box));
     });
+    group1_toggle1->on_event([&](const egt::Event& event){
+        if (event.id() == egt::EventId::pointer_click){
+            buzzer_on_button_click();
 
-    group1_toggle1->on_event([&](const egt::Event&){
-        if (group1_toggle1->checked()){
-            item1_mode_text = "Item1 : 30A Mode";
+            if (group1_toggle1->checked()) {
+                CT_group1_status = false;
+                item1_mode_text = "Item1 : 30A Mode";
+            } else {
+                CT_group1_status = true;
+                item1_mode_text = "Item1 : 50A Mode";
+            }
+
+            combined = item1_mode_text + "\n" + item2_mode_text + "\n" + item3_mode_text;
+            mode_view_button.text(combined);
         }
-        else{
-            item1_mode_text = "Item1 : 50A Mode";   
-        }
-        combined = item1_mode_text + "\n" + item2_mode_text + "\n" + item3_mode_text;
-        mode_view_button.text(combined);
     });
-    group1_toggle2->on_event([&](const egt::Event&){
-        if (group1_toggle2->checked()){
-            item2_mode_text = "Item2 : 30A Mode";
+    group1_toggle2->on_event([&](const egt::Event& event){
+        if (event.id() == egt::EventId::pointer_click){
+            buzzer_on_button_click();
+            if (group1_toggle2->checked()){
+                CT_group2_status = false;
+                item2_mode_text = "Item2 : 30A Mode";
+            }
+            else{
+                CT_group2_status = true;
+                item2_mode_text = "Item2 : 50A Mode";
+            }
+            combined = item1_mode_text + "\n" + item2_mode_text + "\n" + item3_mode_text;
+            mode_view_button.text(combined);
         }
-        else{
-            item2_mode_text = "Item2 : 50A Mode";
-        }
-        combined = item1_mode_text + "\n" + item2_mode_text + "\n" + item3_mode_text;
-        mode_view_button.text(combined);
     });
 
-    group1_toggle3->on_event([&](const egt::Event&){
-        if (group1_toggle3->checked()){
-            item3_mode_text = "Item3 : 30A Mode";
+    group1_toggle3->on_event([&](const egt::Event& event){
+        if (event.id() == egt::EventId::pointer_click){
+            buzzer_on_button_click();
+            if (group1_toggle3->checked()){
+                CT_group3_status = false;
+                item3_mode_text = "Item3 : 30A Mode";
+            }
+            else{
+                CT_group3_status = true;
+                item3_mode_text = "Item3 : 50A Mode";
+            }
+            combined = item1_mode_text + "\n" + item2_mode_text + "\n" + item3_mode_text;
+            mode_view_button.text(combined);
         }
-        else{
-            item3_mode_text = "Item3 : 50A Mode";
-        }
-        combined = item1_mode_text + "\n" + item2_mode_text + "\n" + item3_mode_text;
-        mode_view_button.text(combined);
     });
+    egt::PeriodicTimer backlight_timer{std::chrono::seconds(cfg.backlight_sleep_timer)};
+    backlight_timer.on_timeout([&]()
+    {
+        if(!backlight_status){
+            set_brightness(cfg.backlight_sleep_level);
+            backlight_status = true;
+        }
+    });
+    backlight_timer.start();
+    win.on_event([&backlight_timer](egt::Event& event) {
+        if (event.id() == EventId::pointer_click ||
+        event.id() == EventId::raw_pointer_down ||
+        event.id() == EventId::raw_pointer_move ||
+        event.id() == EventId::raw_pointer_up){
+            if(backlight_status){
+                set_brightness(7);
+                backlight_status = false;
+            }
+            backlight_timer.start();
+        }
+        
+    });
+
     std::string fail_log_filename = "failed_transmissions_log.csv";
-    // network_timer.on_timeout([&]()
-    // {
-    //     if (isNetworkAvailable())
-    //     {
-    //         title_right_box.remove_all();
-    //         title_right_box.add(right(clouda_button));
-    //         title_right_box.add(right(wifi_button));
-    //         title_right_box.add(right(power_button));
-    //     }
-    //     else
-    //     {
-    //         title_right_box.remove_all();
-    //         title_right_box.add(right(netork_warning_button));
-    //         title_right_box.add(right(wifi_button));
-    //         title_right_box.add(right(power_button));
-    //     }
-    // });
+
     network_timer.on_timeout([&]()
     {
         static std::atomic<bool> busy{false};
@@ -2232,10 +2315,48 @@ int main(int argc, char** argv)
         busy = true;
         std::thread([&]()
         {
-            
+            // group1_toggle1->checked(CT_group1_status);
+            // group1_toggle2->checked(CT_group2_status);
+            // group1_toggle3->checked(CT_group3_status);
+            // item1_mode_text = CT_group1_status ? "Item1 : 50A Mode" : "Item1 : 30A Mode";
+            // item2_mode_text = CT_group2_status ? "Item2 : 50A Mode" : "Item2 : 30A Mode";
+            // item3_mode_text = CT_group3_status ? "Item3 : 50A Mode" : "Item3 : 30A Mode";
+            // combined = item1_mode_text + "\n" + item2_mode_text + "\n" + item3_mode_text;
+            // mode_view_button.text(combined);
+            // mode_view_button.layout();
+            // mode_view_button.damage();
+            // group1_toggle1->layout();
+            // group1_toggle2->layout();
+            // group1_toggle3->layout();
+
+            // group1_toggle1->damage();
+            // group1_toggle2->damage();
+            // group1_toggle3->damage();
+            if (label_status){
+                label_status->text(wifi_status_text);
+                label_status->layout();
+                label_status->damage();
+            }
+                
+            float voltage = adc(RTC_BAT_PATH);
+            VoltageStatus status = voltage_to_status(voltage);
+            printf("Voltage: %.3fV\n", voltage);
+            switch (status) {
+                case STATUS_EMPTY:
+                    battery_label->image(egt::Image("icon:battery_empty.png;64"));
+                    printf("battery status : empty\n");
+                    break;
+                case STATUS_LOW:
+                    battery_label->image(egt::Image("icon:battery_low.png;64"));
+                    printf("battery status : low\n");
+                    break;
+                case STATUS_NORMAL:
+                    battery_label->image(egt::Image("icon:battery.png;64"));
+                    printf("battery status: normal\n");
+                    break;
+            }
             bool network_ok = isNetworkAvailable();
     
-            
             if (network_ok)
             {
                 clouda_button->image(egt::Image("icon:clouda.png;64"));
@@ -2257,27 +2378,6 @@ int main(int argc, char** argv)
     });
     bool is_sd_mounted = false;
     
-    // log_timer.on_timeout([&]()
-    // {
-    //     if (is_sd_mounted == false) {
-    //         if(mount_sd_card(sd_device, mount_point)){
-    //             is_sd_mounted = true;
-    //         }
-    //     }
-    //     else {
-    //         if(!is_sd_card_inserted(sd_device, mount_point)) {
-    //             is_sd_mounted = false;
-    //         }
-    //     }
-    
-    //     if (is_sd_mounted == true) {
-    //         copy_csv_to_sd(mount_point);
-    //     }
-    //     else {
-    //         printf("no sd\n\r");
-    //     }
-    //     sync();
-    // });
     log_timer.on_timeout([&]() {
         static std::atomic<bool> busy{false};
     
@@ -2313,6 +2413,7 @@ int main(int argc, char** argv)
 
     log_timer.start();
     network_timer.start();
+    set_brightness(7);
     write_controlboard_set_time();
     std::thread read_controlboard_thread(read_controlboard_data_thread);
     read_controlboard_thread.detach();
