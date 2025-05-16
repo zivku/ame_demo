@@ -63,3 +63,9 @@
      <li>5. [INFO]新增power_button的長壓邏輯，長按超過設定時間後關閉系統</li>
       
 </ul>
+
+5/16 v2.0更新內容 : <br>       
+<ul>
+     <li>1. [Debug]app callback方式會持續塞滿CPU使用率，目前先移除做長時間運行測試</li>         
+      
+</ul>

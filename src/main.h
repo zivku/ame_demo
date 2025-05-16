@@ -5,6 +5,7 @@
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
+#include <condition_variable>
 #include <cstdlib>
 #include <vector>
 #include <planes/plane.h>
@@ -66,7 +67,18 @@ int current_ct_item;
 std::string wifi_status_text = "WiFi status not set";
 bool wifi_reset_status = true;
 bool backlight_status = false;
+bool network_ok = true;
 
+
+static egt::Image img_battery_empty("icon:battery_empty.png;64");
+static egt::Image img_battery_low("icon:battery_low.png;64");
+static egt::Image img_battery_normal("icon:battery.png;64");
+static egt::Image img_clouda("icon:clouda.png;64");
+static egt::Image img_warning("icon:warning.png;64");
+static egt::Image img_cancel("icon:cancel.png;64");
+static egt::Image img_wifi("icon:wifi.png;64");
+static egt::Image img_white("file:image/white_rectangle.png");
+static egt::Image img_green("file:image/green_rectangle.png");
 std::vector<std::vector<std::string>> ct_current_data_list1 = {
     {"CT1", "CT2", "CT3","CT4","CT5","CT6","CT7","CT8"},
     {"0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A", "0.00 A"}

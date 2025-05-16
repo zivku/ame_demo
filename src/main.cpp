@@ -230,14 +230,28 @@ bool isNetworkAvailable()
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) return false;
 
+    struct timeval timeout = {2, 0}; // 2秒 timeout
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+
     struct sockaddr_in server;
+    memset(&server, 0, sizeof(server));
     server.sin_family = AF_INET;
     server.sin_port = htons(80);
     inet_pton(AF_INET, "8.8.8.8", &server.sin_addr);
 
     bool success = (connect(sock, (struct sockaddr*)&server, sizeof(server)) == 0);
+    if (!success)
+        perror("connect");
+
     close(sock);
     return success;
+}
+bool isEth0Up()
+{
+    std::ifstream f("/sys/class/net/eth0/operstate");
+    std::string state;
+    return (f >> state) && (state == "up");
 }
 std::string format_date_time(const DateTime& dt) {
     std::ostringstream oss;
@@ -888,7 +902,7 @@ uint16_t calibrate_current(uint16_t value, bool sw3_setting, bool ct_group3_stat
 }
 void read_controlboard_data_thread(){
     speed_t speed = B115200;
-    int vtime = 5;
+    int vtime = 1;
     int received_bytes = 0;
     int expected_bytes = 40;
     while(1) {
@@ -920,7 +934,7 @@ void read_controlboard_data_thread(){
                     // 找到完整封包，處理它
                     const uint8_t* pkt_buf = control_board_buffer + i;
                     ControlPacket_t* pkt = (ControlPacket_t*)pkt_buf;
-                    print_control_packet(pkt);
+                    //print_control_packet(pkt);
                     
                     
                     if (validate_control_packet_checksum(pkt)) {
@@ -1038,6 +1052,7 @@ void read_controlboard_data_thread(){
         }
         else{
             printf("Invalid packet size: %d bytes. Skipping...\n", received_bytes);
+            usleep(10 * 1000);
             //usleep(1*1000*1000);
             //free(receive);
             //continue;
@@ -1475,229 +1490,58 @@ int main(int argc, char** argv)
     //========================CT page box================================
     ct_timer.on_timeout([&]()
     {
+        static std::atomic<bool> busy{false};
+        if (busy)
+            return;
+        busy = true;
+
         current_time = get_current_time();
         formatted_time = format_date_time(current_time);
+
+        
         ct_time_label->text(formatted_time);
-        switch(current_ct_group) {
-            case 0:
-                //ct_mode_label->text(CT_group1_status ? "50A Mode" : "30A Mode");
-                ct_current_data->text(ct_current_data_list1[1][current_ct_item]);
-            break;
-            case 1:
-                //ct_mode_label->text(CT_group2_status ? "50A Mode" : "30A Mode");
-                ct_current_data->text(ct_current_data_list2[1][current_ct_item]);
-            break;
-            case 2:
-                //ct_mode_label->text(CT_group3_status ? "50A Mode" : "30A Mode");
-                ct_current_data->text(ct_current_data_list3[1][current_ct_item]);
-            break;
+
+        // 依 current_ct_group 選取對應的資料陣列
+        const std::vector<std::string>* current_list = nullptr;
+        switch (current_ct_group)
+        {
+            case 0: current_list = &ct_current_data_list1[1]; break;
+            case 1: current_list = &ct_current_data_list2[1]; break;
+            case 2: current_list = &ct_current_data_list3[1]; break;
+            default: break;
         }
-        switch(current_ct_item) {
-            case 0:
-                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] == "0.00 A"){
-                    ct_status1->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
-                    ct_status1->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
-                    ct_status1->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status1->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
-                    ct_status1->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status1->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-            break;
-            case 1:
-                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] == "0.00 A"){
-                    ct_status2->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
-                    ct_status2->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
-                    ct_status2->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status2->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
-                    ct_status2->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status2->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-            break;
-            case 2:
-                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] == "0.00 A"){
-                    ct_status3->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
-                    ct_status3->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
-                    ct_status3->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status3->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
-                    ct_status3->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status3->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-            break;
-            case 3:
-                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] == "0.00 A"){
-                    ct_status4->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
-                    ct_status4->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
-                    ct_status4->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status4->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
-                    ct_status4->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status4->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-            break;
-            case 4:
-                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] == "0.00 A"){
-                    ct_status5->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
-                    ct_status5->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
-                    ct_status5->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status5->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
-                    ct_status5->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status5->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-            break;
-            case 5:
-                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] == "0.00 A"){
-                    ct_status6->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
-                    ct_status6->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
-                    ct_status6->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status6->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
-                    ct_status6->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status6->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-            break;
-            case 6:
-                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] == "0.00 A"){
-                    ct_status7->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
-                    ct_status7->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
-                    ct_status7->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status7->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
-                    ct_status7->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status7->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-            break;
-            case 7:
-                if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] == "0.00 A"){
-                    ct_status8->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
-                    ct_status8->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
-                    ct_status8->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status8->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
-                    ct_status8->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status8->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-            break;
-            case 8: 
-                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
-                    ct_status9->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status9->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
-                    ct_status9->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status9->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-            break;
-            case 9:
-                if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] == "0.00 A"){
-                    ct_status10->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status10->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
-                    ct_status10->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status10->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-            break;
-            case 10: 
-                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
-                    ct_status11->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status11->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-            break;
-            case 11:
-                if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] == "0.00 A"){
-                    ct_status12->image(egt::Image("file:image/white_rectangle.png"));
-                }
-                else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status12->image(egt::Image("file:image/green_rectangle.png"));
-                } 
-            break;
+
+        if (!current_list)
+        {
+            busy = false;
+            return;
         }
+
+        // 依 current_ct_item 取得對應的顯示文字
+        const std::string& current_text = (*current_list)[current_ct_item];
+        ct_current_data->text(current_text);
+
+        // 建立指向各狀態影像控件的陣列，方便用 index 取代大量 case
+        auto status_widgets = std::vector{ct_status1, ct_status2, ct_status3, ct_status4,
+        ct_status5, ct_status6, ct_status7, ct_status8,
+        ct_status9, ct_status10, ct_status11, ct_status12};
+
+        if (current_ct_item < 0 || current_ct_item >= (int)status_widgets.size())
+        {
+            busy = false;
+            return;
+        }
+
+        // 判斷是否為 "0.00 A"
+        if (current_text == "0.00 A"){
+            status_widgets[current_ct_item]->image(egt::Image(img_white));
+        }
+        else{
+            status_widgets[current_ct_item]->image(egt::Image(img_green));
+        }
+
+        busy = false;
+        
     });
     ct_next_data_button->on_click([&](egt::Event &)
     {
@@ -2306,85 +2150,75 @@ int main(int argc, char** argv)
     });
 
     std::string fail_log_filename = "failed_transmissions_log.csv";
-
+ 
     network_timer.on_timeout([&]()
     {
         static std::atomic<bool> busy{false};
-    
-        if (busy) return;  // 如果還在跑上一次的就跳過
+        if (busy.load()) {
+            return;
+        }
         busy = true;
-        std::thread([&]()
-        {
-            // group1_toggle1->checked(CT_group1_status);
-            // group1_toggle2->checked(CT_group2_status);
-            // group1_toggle3->checked(CT_group3_status);
-            // item1_mode_text = CT_group1_status ? "Item1 : 50A Mode" : "Item1 : 30A Mode";
-            // item2_mode_text = CT_group2_status ? "Item2 : 50A Mode" : "Item2 : 30A Mode";
-            // item3_mode_text = CT_group3_status ? "Item3 : 50A Mode" : "Item3 : 30A Mode";
-            // combined = item1_mode_text + "\n" + item2_mode_text + "\n" + item3_mode_text;
-            // mode_view_button.text(combined);
-            // mode_view_button.layout();
-            // mode_view_button.damage();
-            // group1_toggle1->layout();
-            // group1_toggle2->layout();
-            // group1_toggle3->layout();
 
-            // group1_toggle1->damage();
-            // group1_toggle2->damage();
-            // group1_toggle3->damage();
-            if (label_status){
-                label_status->text(wifi_status_text);
-                label_status->layout();
-                label_status->damage();
-            }
-                
-            float voltage = adc(RTC_BAT_PATH);
-            VoltageStatus status = voltage_to_status(voltage);
-            printf("Voltage: %.3fV\n", voltage);
-            switch (status) {
-                case STATUS_EMPTY:
-                    battery_label->image(egt::Image("icon:battery_empty.png;64"));
-                    printf("battery status : empty\n");
-                    break;
-                case STATUS_LOW:
-                    battery_label->image(egt::Image("icon:battery_low.png;64"));
-                    printf("battery status : low\n");
-                    break;
-                case STATUS_NORMAL:
-                    battery_label->image(egt::Image("icon:battery.png;64"));
-                    printf("battery status: normal\n");
-                    break;
-            }
-            bool network_ok = isNetworkAvailable();
-    
-            if (network_ok)
-            {
-                clouda_button->image(egt::Image("icon:clouda.png;64"));
-                
-            }
-            else
-            {
-                clouda_button->image(egt::Image("icon:warning.png;64"));
-            }
-            if(wifi_reset_blocked){
-                wifi_button->image(egt::Image("icon:cancel.png;64"));
-            }
-            else{
-                wifi_button->image(egt::Image("icon:wifi.png;64"));
-            }
-            busy = false;    
+        float voltage = adc(RTC_BAT_PATH);
+        status = voltage_to_status(voltage);
+        network_ok = isEth0Up();
 
-        }).detach();  // 確保不會卡住 timer 執行緒
+        if (label_status) {
+            label_status->text(wifi_status_text);
+            label_status->damage();
+        }
+
+        switch (status) {
+            case STATUS_EMPTY:
+                battery_label->image(egt::Image(img_battery_empty));
+                break;
+            case STATUS_LOW:
+                battery_label->image(egt::Image(img_battery_low));
+                break;
+            case STATUS_NORMAL:
+                battery_label->image(egt::Image(img_battery_normal));
+                break;
+        }
+
+        clouda_button->image(egt::Image(network_ok ? img_clouda : img_warning));
+        wifi_button->image(egt::Image(wifi_reset_blocked ? img_cancel : img_wifi));
+        busy = false;
+        // app.event().add_idle_callback([=]() mutable {
+        //     // 在主線程更新 UI
+        //     if (label_status) {
+        //         label_status->text(wifi_text_copy);
+        //         label_status->damage();
+        //         last_wifi_text = wifi_text_copy;
+        //     }
+
+        //     switch (status_copy) {
+        //         case STATUS_EMPTY:
+        //             battery_label->image(egt::Image(img_battery_empty));
+        //             break;
+        //         case STATUS_LOW:
+        //             battery_label->image(egt::Image(img_battery_low));
+        //             break;
+        //         case STATUS_NORMAL:
+        //             battery_label->image(egt::Image(img_battery_normal));
+        //             break;
+        //     }
+
+        //     bat_status = status_copy;
+        //     clouda_button->image(egt::Image(network_ok_copy ? img_clouda : img_warning));
+        //     network_status = network_ok_copy;
+        //     wifi_button->image(egt::Image(wifi_reset_blocked_copy ? img_cancel : img_wifi));
+        //     wifi_status = wifi_reset_blocked_copy;
+
+        //     busy = false; // UI 更新完成後，才解除 busy
+
+        //     return false; // callback 只執行一次
+        // });
+
+        
     });
     bool is_sd_mounted = false;
-    
-    log_timer.on_timeout([&]() {
-        static std::atomic<bool> busy{false};
-    
-        if (busy) return;  // 如果還在跑上一次的就跳過
-        busy = true;
-    
-        std::thread([&]() {
+    std::thread([&]() {
+        while(1){
             if (!is_sd_mounted) {
                 if (mount_sd_card(sd_device, mount_point)) {
                     is_sd_mounted = true;
@@ -2394,7 +2228,7 @@ int main(int argc, char** argv)
                     is_sd_mounted = false;
                 }
             }
-    
+
             if (is_sd_mounted) {
                 int ret = copy_csv_to_sd(mount_point);
                 if (ret < 0) {
@@ -2405,13 +2239,46 @@ int main(int argc, char** argv)
             } else {
                 printf("no sd\n\r");
             }
+
+            
+            usleep(cfg.log_time_delay * 1000 * 1000);
+        }
+        
+    }).detach();
+    // log_timer.on_timeout([&]() {
+    //     static std::atomic<bool> busy{false};
+    
+    //     if (busy) return;  // 如果還在跑上一次的就跳過
+    //     busy = true;
+    
+    //     std::thread([&]() {
+    //         if (!is_sd_mounted) {
+    //             if (mount_sd_card(sd_device, mount_point)) {
+    //                 is_sd_mounted = true;
+    //             }
+    //         } else {
+    //             if (!is_sd_card_inserted(sd_device, mount_point)) {
+    //                 is_sd_mounted = false;
+    //             }
+    //         }
+    
+    //         if (is_sd_mounted) {
+    //             int ret = copy_csv_to_sd(mount_point);
+    //             if (ret < 0) {
+    //                 // TODO: 容量不足或寫入失敗時要處理的事情
+    //                 std::cerr << "Error: Failed to copy CSV files to SD card." << std::endl;
+    //             }
+    //             sync();
+    //         } else {
+    //             printf("no sd\n\r");
+    //         }
     
             
-            busy = false;
-        }).detach();
-    });
+    //         busy = false;
+    //     }).detach();
+    // });
 
-    log_timer.start();
+    // log_timer.start();
     network_timer.start();
     set_brightness(7);
     write_controlboard_set_time();
