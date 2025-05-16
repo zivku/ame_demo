@@ -32,7 +32,7 @@
 #include "math.h"
 #include "adc.h"
 #define PROJECT_NAME "holystone_ame"
-#define VERSION "v1.9"
+#define VERSION "v2.0"
 #define CONTROL_BOARD_BUFFER_SIZE 1024  // 緩衝區大小
 #define CONTROL_BOARD_MAX_PACKET_SIZE 64     // 假設最大封包大小
 
