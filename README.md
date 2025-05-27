@@ -69,3 +69,9 @@
      <li>1. [Debug]app callback方式會持續塞滿CPU使用率，目前先移除做長時間運行測試</li>         
       
 </ul>
+
+5/27 v2.1更新內容 : <br>        
+<ul>
+     <li>1. [INFO]增加#define LANGUAGE_ZH 1做為內容中英文切換</li>          
+      
+</ul>

@@ -110,9 +110,6 @@ uint8_t* uart_read(const char* DEV_PATH, speed_t baudRate, int vtime, int expect
     tcsetattr(fd, TCSANOW, &options);
 
     while ((ret = read(fd, rx_data, BUF_SIZE - 1)) > 0) {
-        // printf("============================================================\n\r");
-        //printf("Read %d bytes, total received: %d\n\r", ret, received_bytes + ret);
-        //printf("In file: %s, function: %s, line: %d\n", __FILE__, __func__, __LINE__);
         received_bytes += ret;
         if (received_bytes >= expected_bytes){
             break;
@@ -126,7 +123,7 @@ int uart_write(const char* DEV_PATH, speed_t baudRate, int vtime, uint8_t tx_dat
 {
     int fd;
     int ret;
-    uint8_t* rx_data = new uint8_t[BUF_SIZE];
+    //uint8_t* rx_data = new uint8_t[BUF_SIZE];
     struct termios options;
     /* open uart */
     fd = open(DEV_PATH, O_RDWR | O_NOCTTY);

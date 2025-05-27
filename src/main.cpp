@@ -1,7 +1,7 @@
 #include "main.h"
 void resend_wifi_FailedLog(const std::string& fail_log_filename, int wifi_batch_size) {
     std::lock_guard<std::mutex> lock(fail_log_mutex);
-    std::fstream fail_log_file(fail_log_filename, std::ios::in | std::ios::out | std::ios::app);
+    std::fstream fail_log_file(fail_log_filename, std::ios::in);
     if (!fail_log_file.is_open()) {
         std::cerr << "Failed to open fail log file!" << std::endl;
         return;
@@ -117,17 +117,18 @@ int uartTransmitCurrentToWiFi(int ct_num, float current){
     
     std::string response(reinterpret_cast<char*>(recive), received_bytes);
     std::cout << "Received: " << response << "CT NUM: " << ct_num << std::endl;
+    int result = TRANSMIT_UNKNOWN_RESPONSE;
     if (response.find("send ok") != std::string::npos) {
         std::cerr << "Transmit OK!\n\r" << std::endl;
-        return TRANSMIT_OK;
+        result = TRANSMIT_OK;
     } 
     else if (response.find("send fail") != std::string::npos) {
         std::cerr << "Transmission failed! Logging failed data.\n\r" << std::endl;
-        return TRANSMIT_SEND_FAIL;
+        result = TRANSMIT_SEND_FAIL;
     } 
     else if (response.find("checksum error") != std::string::npos) {
         std::cerr << "Checksum error! Discarding data.\n\r" << std::endl;
-        return TRANSMIT_CHECKSUM_ERROR;
+        result = TRANSMIT_CHECKSUM_ERROR;
     } 
     else if (response.find("WiFi error:") != std::string::npos) {
         int error_code = 0;
@@ -138,27 +139,252 @@ int uartTransmitCurrentToWiFi(int ct_num, float current){
         std::cerr << "WiFi error! Code: 0x" << std::hex << error_code << "\n\r";
         // 判斷對應錯誤碼
         switch (error_code) {
-            case 0x3001:
-                std::cerr << "Error: Wi-Fi not initialized.\n\r";
-                return TRANSMIT_WIFI_ERROR_NOT_INIT;
-            case 0x3002:
-                std::cerr << "Error: Wi-Fi not started.\n\r";
-                return TRANSMIT_WIFI_ERROR_NOT_STARTED;
-            case 0x3003:
-                std::cerr << "Error: Wi-Fi not connected to AP.\n\r";
-                return TRANSMIT_WIFI_ERROR_NOT_CONNECTED;
-            case 0x3004:
-                std::cerr << "Error: Invalid argument.\n\r";
-                return TRANSMIT_WIFI_ERROR_INVALID_ARG;
-            default:
-                std::cerr << "Error: Unknown Wi-Fi error.\n\r";
-                return TRANSMIT_WIFI_ERROR_UNKNOWN;
+            case 0x3001: result = TRANSMIT_WIFI_ERROR_NOT_INIT; break;
+            case 0x3002: result = TRANSMIT_WIFI_ERROR_NOT_STARTED; break;
+            case 0x3003: result = TRANSMIT_WIFI_ERROR_NOT_CONNECTED; break;
+            case 0x3004: result = TRANSMIT_WIFI_ERROR_INVALID_ARG; break;
+            default:     result = TRANSMIT_WIFI_ERROR_UNKNOWN; break;
         }
     } 
     else {
         std::cerr << "Unknown response received.\n\r" << std::endl;
-        return TRANSMIT_UNKNOWN_RESPONSE;
+        result = TRANSMIT_UNKNOWN_RESPONSE;
     }
+    delete[] recive;
+    return result;
+}
+int uartTransmitBatteryToWiFi(float bat_voltage){
+    uint16_t bat_value = static_cast<uint16_t>(bat_voltage * 10);
+
+    TransmitBatteryPacket packet;
+    packet.bat_num = 0x1F;
+    packet.function = 0x03;
+    packet.data_len = 0x02;
+    packet.high_byte = bat_value >> 8;
+    packet.low_byte = bat_value & 0xFF;
+    packet.crc_low = 0xFF;
+    packet.crc_high = 0xFF;
+    uint8_t* raw_ptr = reinterpret_cast<uint8_t*>(&packet);
+    
+    uint16_t crc = calculate_crc16(raw_ptr, sizeof(packet) - 2);
+    packet.crc_low = crc & 0xFF;
+    packet.crc_high = (crc >> 8) & 0xFF;
+
+    speed_t speed = B115200;
+    int vtime = 1;
+    int received_bytes = 0;
+
+    uint8_t *recive = uart_transmit(WIFI_UART1_PATH, speed, vtime, raw_ptr, sizeof(packet), received_bytes);
+    
+    std::string response(reinterpret_cast<char*>(recive), received_bytes);
+    std::cout << "Received: " << response << "BAT : " << 0x1F << std::endl;
+    int result = TRANSMIT_UNKNOWN_RESPONSE;
+    if (response.find("send ok") != std::string::npos) {
+        std::cerr << "Battery Transmit OK!\n\r" << std::endl;
+        result = TRANSMIT_OK;
+    } 
+    else if (response.find("send fail") != std::string::npos) {
+        std::cerr << "Battery Transmission failed! Logging failed data.\n\r" << std::endl;
+        result = TRANSMIT_SEND_FAIL;
+    } 
+    else if (response.find("checksum error") != std::string::npos) {
+        std::cerr << "Battery Checksum error! Discarding data.\n\r" << std::endl;
+        result = TRANSMIT_CHECKSUM_ERROR;
+    } 
+    else if (response.find("WiFi error:") != std::string::npos) {
+        int error_code = 0;
+        size_t pos = response.find("WiFi error:");
+        if (pos != std::string::npos) {
+            sscanf(response.c_str() + pos, "WiFi error: %x", &error_code);
+        }
+        std::cerr << "Battery WiFi error! Code: 0x" << std::hex << error_code << "\n\r";
+        // 判斷對應錯誤碼
+        switch (error_code) {
+            case 0x3001:
+                std::cerr << "Battery Error: Wi-Fi not initialized.\n\r";
+                result = TRANSMIT_WIFI_ERROR_NOT_INIT;
+                break;
+            case 0x3002:
+                std::cerr << "Battery Error: Wi-Fi not started.\n\r";
+                result = TRANSMIT_WIFI_ERROR_NOT_STARTED;
+                break;
+            case 0x3003:
+                std::cerr << "Battery Error: Wi-Fi not connected to AP.\n\r";
+                result = TRANSMIT_WIFI_ERROR_NOT_CONNECTED;
+                break;
+            case 0x3004:
+                std::cerr << "Battery Error: Invalid argument.\n\r";
+                result = TRANSMIT_WIFI_ERROR_INVALID_ARG;
+                break;
+            default:
+                std::cerr << "Battery Error: Unknown Wi-Fi error.\n\r";
+                result = TRANSMIT_WIFI_ERROR_UNKNOWN;
+                break;
+        }
+    } 
+    else {
+        std::cerr << "Battery Unknown response received.\n\r" << std::endl;
+        result = TRANSMIT_UNKNOWN_RESPONSE;
+    }
+    delete[] recive;
+    return result;
+}
+int uartCheckWifiConnect(){
+    CheckWifiPacket packet;
+    packet.id = 0xFE;
+    packet.function = 0x81;
+    packet.data_len = 0x02;
+    packet.high_byte = 0x00;
+    packet.low_byte = 0x00;
+    packet.crc_low = 0xFF;
+    packet.crc_high = 0xFF;
+    uint8_t* raw_ptr = reinterpret_cast<uint8_t*>(&packet);
+    
+    uint16_t crc = calculate_crc16(raw_ptr, sizeof(packet) - 2);
+    packet.crc_low = crc & 0xFF;
+    packet.crc_high = (crc >> 8) & 0xFF;
+
+    speed_t speed = B115200;
+    int vtime = 1;
+    int received_bytes = 0;
+
+    uint8_t *recive = uart_transmit(WIFI_UART2_PATH, speed, vtime, raw_ptr, sizeof(packet), received_bytes);
+    int result = TRANSMIT_UNKNOWN_RESPONSE;
+    if (received_bytes >= 7 && recive[0] == 0xFE)
+    {
+        uint16_t crc_calculated = calculate_crc16(recive, received_bytes - 2);
+        uint16_t crc_received = recive[received_bytes - 2] | (recive[received_bytes - 1] << 8);
+        if (crc_calculated == crc_received){
+            uint16_t wifi_status = (recive[3] << 8) | recive[4];
+
+            switch (wifi_status)
+            {
+                case WifiStatus::OK:
+                    std::cerr << "Check WiFi Status: Connected to AP.\n";
+                    result = TRANSMIT_OK;
+                    break;
+                case WifiStatus::ERR_WIFI_NOT_INIT:
+                    std::cerr << "Check Error: Wi-Fi not initialized.\n";
+                    result = TRANSMIT_WIFI_ERROR_NOT_INIT;
+                    break;
+                case WifiStatus::ERR_WIFI_NOT_STARTED:
+                    std::cerr << "Check Error: Wi-Fi not started.\n";
+                    result = TRANSMIT_WIFI_ERROR_NOT_STARTED;
+                    break;
+                case WifiStatus::ERR_WIFI_CONN:
+                    std::cerr << "Check Error: Wi-Fi not connected to AP.\n";
+                    result = TRANSMIT_WIFI_ERROR_NOT_CONNECTED;
+                    break;
+                case WifiStatus::ERR_INVALID_ARG:
+                    std::cerr << "Check Error: Invalid argument.\n";
+                    result = TRANSMIT_WIFI_ERROR_INVALID_ARG;
+                    break;
+                default:
+                    std::cerr << "Check Error: Unknown Wi-Fi error code: 0x" << std::hex << wifi_status << "\n";
+                    result = TRANSMIT_WIFI_ERROR_UNKNOWN;
+                    break;
+            }
+        }
+        else {
+            std::cerr << "Check CRC 校驗失敗，資料可能錯誤" << std::endl;
+            result = TRANSMIT_CHECKSUM_ERROR;
+        }
+    }
+    else
+    {
+        std::cerr << "Check Unknown or incomplete response received.\n";
+        result = TRANSMIT_UNKNOWN_RESPONSE;
+    }
+    delete[] recive;
+    return result;
+}
+int uartReadWifiTime(){
+    ReadWifiTimePacket packet;
+    packet.id = 0xFE;
+    packet.function = 0x82;
+    packet.high_byte = 0x00;
+    packet.low_byte = 0x00;
+    packet.crc_low = 0x25;
+    packet.crc_high = 0xAC;
+    uint8_t* raw_ptr = reinterpret_cast<uint8_t*>(&packet);
+    
+    // uint16_t crc = calculate_crc16(raw_ptr, sizeof(packet) - 2);
+    // packet.crc_low = crc & 0xFF;
+    // packet.crc_high = (crc >> 8) & 0xFF;
+
+    speed_t speed = B115200;
+    int vtime = 3;
+    int received_bytes = 0;
+    std::cout << "Sending packet: ";
+    for (size_t i = 0; i < sizeof(packet); ++i) {
+        printf("%02X ", raw_ptr[i]);
+    }
+    std::cout << std::endl;
+
+    uint8_t *recive = uart_transmit(WIFI_UART2_PATH, speed, vtime, raw_ptr, sizeof(packet), received_bytes);
+
+    std::cout << "Received bytes: " << received_bytes << std::endl;
+    std::cout << "Received data: ";
+    for (int i = 0; i < received_bytes; ++i) {
+        printf("%02X ", recive[i]);
+    }
+    std::cout << std::endl;
+
+
+    int result = TRANSMIT_UNKNOWN_RESPONSE;
+    if (received_bytes >= 9 && recive[0] == 0xFE)
+    {
+        uint16_t crc_calculated = calculate_crc16(recive, received_bytes - 2);
+        uint16_t crc_received = recive[received_bytes - 2] | (recive[received_bytes - 1] << 8);
+        if (crc_calculated == crc_received){
+            //uint32_t timestamp = recive[3] | (recive[4] << 8) | (recive[5] << 16) | (recive[6] << 24);
+            uint32_t timestamp = (recive[3] << 24) | (recive[4] << 16) | (recive[5] << 8) | recive[6];
+            // 加上台灣時區偏移 (+8 小時)
+            timestamp += 8 * 3600;
+    
+            // 轉成 tm 結構
+            std::time_t t = static_cast<std::time_t>(timestamp);
+            std::tm *timeinfo = std::gmtime(&t); // 用 gmtime 取得 UTC+0 時區的 tm 結構
+    
+            // 轉成你定義的 DateTime
+            DateTime dt;
+            dt.year = timeinfo->tm_year + 1900;
+            dt.month = timeinfo->tm_mon + 1;
+            dt.day = timeinfo->tm_mday;
+            dt.hour = timeinfo->tm_hour;
+            dt.minute = timeinfo->tm_min;
+            dt.second = timeinfo->tm_sec;
+            if (dt.year == 1970) {
+                std::cerr << "Received invalid time (likely no AP or NTP): "
+                          << dt.year << "-" << dt.month << "-" << dt.day << " "
+                          << dt.hour << ":" << dt.minute << ":" << dt.second << std::endl;
+                delete[] recive;
+                return TRANSMIT_UNKNOWN_RESPONSE;
+            }
+            else{
+                // 設定系統時間
+                set_system_time(dt);
+        
+                std::cout << "System time updated to: "
+                        << dt.year << "-" << dt.month << "-" << dt.day << " "
+                        << dt.hour << ":" << dt.minute << ":" << dt.second << std::endl;
+        
+                result = TRANSMIT_OK;
+            }
+            
+        }
+        else {
+            std::cerr << "Read WIFI time CRC error.\n" << std::endl;
+            result = TRANSMIT_CHECKSUM_ERROR;
+        }
+    }
+    else
+    {
+        std::cerr << "Read WIFI time Unknown or incomplete response received.\n";
+        result = TRANSMIT_UNKNOWN_RESPONSE;
+    }
+    delete[] recive;
+    return result;
 }
 int copy_csv_to_sd(const std::string& target_dir) {
     for (const auto& entry : fs::directory_iterator(".")) {
@@ -391,6 +617,7 @@ void log_current_data(const std::string& filename, const std::string& fail_log_f
         std::cerr << "open log file error!\n" << std::endl;
         return;
     }
+    uartTransmitBatteryToWiFi(voltage);
     std::vector<std::string> failed_transmissions;
     log_file.seekp(0, std::ios::end);
     if (log_file.tellp() == 0) {
@@ -404,7 +631,7 @@ void log_current_data(const std::string& filename, const std::string& fail_log_f
 
     std::string timestamp = get_current_date_string() + " " + get_current_time_string();
     log_file << timestamp << ", ";
-
+    
     for (size_t set_index = 0; set_index < data_sets.size(); ++set_index) {
         const auto& current_data = data_sets[set_index];
 
@@ -432,7 +659,7 @@ void log_current_data(const std::string& filename, const std::string& fail_log_f
             auto now = std::chrono::steady_clock::now();
             switch (uart_to_wifi_ret) {
                 case TRANSMIT_OK:
-                    wifi_status_text = "Connected";
+                    wifi_status_text = wifi_connect;
                     // 成功，不需要額外處理
                     wifi_reset_blocked = false;
                     wifi_reset_attempts = 0;
@@ -449,7 +676,7 @@ void log_current_data(const std::string& filename, const std::string& fail_log_f
                     break;
             
                 case TRANSMIT_WIFI_ERROR_NOT_INIT:
-                    wifi_status_text = "Connection failed";
+                    wifi_status_text = wifi_connect_fail;
                     if (!wifi_reset_blocked && now - last_wifi_reset_time > WIFI_RESET_COOLDOWN) {
                         std::cerr << "[NOT_INIT] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
                         WIFI_reset_thread();
@@ -466,9 +693,9 @@ void log_current_data(const std::string& filename, const std::string& fail_log_f
                     failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", WiFi error: " + std::to_string(uart_to_wifi_ret) + "\n");
                     break;
                 case TRANSMIT_WIFI_ERROR_NOT_STARTED:
-                    wifi_status_text = "Not Started";
+                    wifi_status_text = wifi_not_start;
                     if (!wifi_reset_blocked && now - last_wifi_reset_time > WIFI_RESET_COOLDOWN) {
-                        std::cerr << "[NOT_STARTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
+                        std::cerr << "[ERROR_NOT_STARTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
                         WIFI_reset_thread();
                         last_wifi_reset_time = now;
                         wifi_reset_attempts++;
@@ -478,12 +705,12 @@ void log_current_data(const std::string& filename, const std::string& fail_log_f
                         }
                     } 
                     else if (wifi_reset_blocked) {
-                        std::cerr << "[NOT_STARTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
+                        std::cerr << "[ERROR_NOT_STARTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
                     }
                     failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", WiFi error: " + std::to_string(uart_to_wifi_ret) + "\n");
                     break;
                 case TRANSMIT_WIFI_ERROR_NOT_CONNECTED:
-                    wifi_status_text = "Connection failed";
+                    wifi_status_text = wifi_connect_fail;
                     if (!wifi_reset_blocked && now - last_wifi_reset_time > WIFI_RESET_COOLDOWN) {
                         std::cerr << "[NOT_CONNECTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
                         WIFI_reset_thread();
@@ -500,9 +727,9 @@ void log_current_data(const std::string& filename, const std::string& fail_log_f
                     failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", WiFi error: " + std::to_string(uart_to_wifi_ret) + "\n");
                     break;
                 case TRANSMIT_WIFI_ERROR_INVALID_ARG:
-                    wifi_status_text = "Connection failed";
+                    wifi_status_text = wifi_connect_fail;
                     if (!wifi_reset_blocked && now - last_wifi_reset_time > WIFI_RESET_COOLDOWN) {
-                        std::cerr << "[NOT_CONNECTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
+                        std::cerr << "[ERROR_INVALID_ARG] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
                         WIFI_reset_thread();
                         last_wifi_reset_time = now;
                         wifi_reset_attempts++;
@@ -512,20 +739,15 @@ void log_current_data(const std::string& filename, const std::string& fail_log_f
                         }
                     } 
                     else if (wifi_reset_blocked) {
-                        std::cerr << "[NOT_CONNECTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
+                        std::cerr << "[ERROR_INVALID_ARG] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
                     }
                     failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", WiFi error: " + std::to_string(uart_to_wifi_ret) + "\n");
                     break;
                 case TRANSMIT_WIFI_ERROR_UNKNOWN:
-                    wifi_status_text = "Connection failed";
+                    wifi_status_text = wifi_connect_fail;
                     std::cerr << "Wi-Fi error occurred. Logging for retry.\n";
-                    failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", WiFi error: " + std::to_string(uart_to_wifi_ret) + "\n");
-                    break;
-            
-                case TRANSMIT_UNKNOWN_RESPONSE:
-                    wifi_status_text = "Connection failed";
                     if (!wifi_reset_blocked && now - last_wifi_reset_time > WIFI_RESET_COOLDOWN) {
-                        std::cerr << "[NOT_CONNECTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
+                        std::cerr << "[WIFI_ERROR_UNKNOWN] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
                         WIFI_reset_thread();
                         last_wifi_reset_time = now;
                         wifi_reset_attempts++;
@@ -535,7 +757,25 @@ void log_current_data(const std::string& filename, const std::string& fail_log_f
                         }
                     } 
                     else if (wifi_reset_blocked) {
-                        std::cerr << "[NOT_CONNECTED] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
+                        std::cerr << "[WIFI_ERROR_UNKNOWN] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
+                    }
+                    failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", WiFi error: " + std::to_string(uart_to_wifi_ret) + "\n");
+                    break;
+            
+                case TRANSMIT_UNKNOWN_RESPONSE:
+                    wifi_status_text = wifi_connect_fail;
+                    if (!wifi_reset_blocked && now - last_wifi_reset_time > WIFI_RESET_COOLDOWN) {
+                        std::cerr << "[UNKNOWN_RESPONSE] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
+                        WIFI_reset_thread();
+                        last_wifi_reset_time = now;
+                        wifi_reset_attempts++;
+                        if (wifi_reset_attempts >= WIFI_RESET_RETRY_LIMIT) {
+                            wifi_reset_blocked = true;  // 超過次數，立旗
+                            std::cerr << "Wi-Fi reset attempts exceeded. Blocking further resets. Manual intervention required.\n";
+                        }
+                    } 
+                    else if (wifi_reset_blocked) {
+                        std::cerr << "[UNKNOWN_RESPONSE] Wi-Fi issue detected. Attempting to reset Wi-Fi...\n";
                     }
                     std::cerr << "Adding to fail log: " << timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) << std::endl;
                     failed_transmissions.push_back(timestamp + ", " + std::to_string(ct_num) + ", " + std::to_string(current) + ", WiFi error: " + std::to_string(uart_to_wifi_ret) + "\n");
@@ -566,6 +806,8 @@ void log_current_data(const std::string& filename, const std::string& fail_log_f
 
         fail_log_file.close();
         manage_fail_log_size(fail_log_filename, max_failed_log_cache);
+        failed_transmissions.clear();
+        std::vector<std::string>().swap(failed_transmissions);
     }
 
 }
@@ -601,8 +843,41 @@ void set_system_time(const DateTime& new_time) {
     if (settimeofday(&tv, nullptr) == -1) {
         perror("Failed to set system time");
     }
+    sync_system_time_to_rtc();
 }
+void sync_system_time_to_rtc() {
+    std::time_t now = std::time(nullptr);
+    if (now == (std::time_t)(-1)) {
+        std::cerr << "Failed to get current system time." << std::endl;
+        return;
+    }
 
+    std::tm* tm_info = std::localtime(&now);
+    if (!tm_info) {
+        std::cerr << "Failed to convert time_t to tm." << std::endl;
+        return;
+    }
+
+    int rtc_fd = open("/dev/rtc", O_RDWR);
+    if (rtc_fd == -1) {
+        perror("Failed to open /dev/rtc");
+        return;
+    }
+
+    struct rtc_time rtc_tm = {};
+    rtc_tm.tm_year = tm_info->tm_year;
+    rtc_tm.tm_mon  = tm_info->tm_mon;
+    rtc_tm.tm_mday = tm_info->tm_mday;
+    rtc_tm.tm_hour = tm_info->tm_hour;
+    rtc_tm.tm_min  = tm_info->tm_min;
+    rtc_tm.tm_sec  = tm_info->tm_sec;
+
+    if (ioctl(rtc_fd, RTC_SET_TIME, &rtc_tm) == -1) {
+        perror("Failed to set RTC time");
+    }
+
+    close(rtc_fd);
+}
 std::vector<std::string> scan_wifi_devices()
 {
     std::vector<std::string> devices;
@@ -692,8 +967,8 @@ void update_wifi_page(egt::VerticalBoxSizer& main_box, egt::VerticalBoxSizer& wi
     // label_item->color(egt::Palette::ColorId::label_text, egt::Palette::black);
     // hbox->add(expand(label_item));
     
-    auto wifi_status_label = std::make_shared<egt::Label>("WiFi Status");
-    wifi_status_label->font(egt::Font("Times New Roman", 24, egt::Font::Weight::bold));
+    auto wifi_status_label = std::make_shared<egt::Label>(wifi_status);
+    wifi_status_label->font(egt::Font("Noto Sans CJK TC", 24, egt::Font::Weight::bold));
     // btn->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent);
     // btn->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent, egt::Palette::GroupId::active);
     wifi_status_label->color(egt::Palette::ColorId::button_text, egt::Palette::black);
@@ -702,13 +977,13 @@ void update_wifi_page(egt::VerticalBoxSizer& main_box, egt::VerticalBoxSizer& wi
     hbox->add(expand(wifi_status_label));
 
     label_status = std::make_shared<egt::Label>(wifi_status_text);
-    label_status->font(egt::Font("Times New Roman", 24, egt::Font::Weight::bold));
+    label_status->font(egt::Font("Noto Sans CJK TC", 24, egt::Font::Weight::bold));
     label_status->color(egt::Palette::ColorId::label_text, egt::Palette::red);
     hbox->add(expand(label_status));
 
     auto wifi_toggle = std::make_shared<egt::ToggleBox>();
-    wifi_toggle->toggle_text("OFF", "ON");
-    wifi_toggle->font(Font("Times New Roman", 24));
+    wifi_toggle->toggle_text(wifi_toggle_off, wifi_toggle_on);
+    wifi_toggle->font(Font("Noto Sans CJK TC", 24));
     wifi_toggle->resize(Size(150, 64));
     wifi_toggle->checked(true); 
     hbox->add(expand(wifi_toggle));
@@ -918,6 +1193,7 @@ void read_controlboard_data_thread(){
                 // 緩衝區溢出處理
                 control_board_buffer_len = 0;
                 fprintf(stderr, "UART buffer overflow. Resetting.\n");
+                delete[] receive;
                 continue;
             }
             size_t i = 0;
@@ -1058,7 +1334,7 @@ void read_controlboard_data_thread(){
             //continue;
         }
         
-        free(receive);
+        delete[] receive;
     }
 }
 void buzzer_on_button_click() {
@@ -1133,10 +1409,12 @@ int main(int argc, char** argv)
         cfg.backlight_sleep_timer = std::stoi(config.get("parameter", "backlight_sleep_timer"));
         cfg.backlight_sleep_level = std::stoi(config.get("parameter", "backlight_sleep_level"));
         cfg.poweroff_timer = std::stoi(config.get("parameter", "poweroff_timer"));
+        cfg.synctime_count_max  = std::stoi(config.get("parameter", "synctime_count_max"));
     }
     egt::TopWindow win;
     OverlayWindow heoWin(egt::Rect(0, 0, 800, 480));
 	heoWin.hide_overlay();  
+    auto font = egt::Font("/usr/share/fonts/noto/NotoSansCJKtc-Regular.otf", 24);
     const auto landscape = screen_size.width() >= screen_size.height();
     auto default_keyboard = std::make_shared<egt::VirtualKeyboard>();
     egt::Size keyboard_size;
@@ -1162,8 +1440,8 @@ int main(int argc, char** argv)
     title_main_box.add(expand(title_right_box));
 
     auto wifi_toggle = std::make_shared<egt::ToggleBox>();
-    wifi_toggle->toggle_text("OFF", "ON");
-    wifi_toggle->font(Font("Times New Roman", 24));
+    wifi_toggle->toggle_text(wifi_toggle_off , wifi_toggle_on);
+    wifi_toggle->font(Font("Noto Sans CJK TC", 24));
     wifi_toggle->resize(Size(150, 64));
     title_middle_box.add(wifi_toggle);
     wifi_toggle->hide();
@@ -1173,32 +1451,32 @@ int main(int argc, char** argv)
     home_button->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent, egt::Palette::GroupId::active);
     title_left_box.add(left(home_button));
 
-    auto battery_label = std::make_shared<egt::ImageLabel>(egt::Image("icon:battery.png;64"));
+    auto battery_label = std::make_shared<egt::ImageLabel>(egt::Image(img_battery_normal));
     title_right_box.add(right(battery_label));
-    float voltage = adc(RTC_BAT_PATH);
+    voltage = adc(RTC_BAT_PATH);
     VoltageStatus status = voltage_to_status(voltage);
     printf("Voltage: %.3fV\n", voltage);
     switch (status) {
         case STATUS_EMPTY:
-            battery_label->image(egt::Image("icon:battery_empty.png;64"));
+            battery_label->image(egt::Image(img_battery_empty));
             printf("battery status : empty\n");
             break;
         case STATUS_LOW:
-            battery_label->image(egt::Image("icon:battery_low.png;64"));
+            battery_label->image(egt::Image(img_battery_low));
             printf("battery status : low\n");
             break;
         case STATUS_NORMAL:
-            battery_label->image(egt::Image("icon:battery.png;64"));
+            battery_label->image(egt::Image(img_battery_normal));
             printf("battery status: normal\n");
             break;
     }
 
-    auto clouda_button = std::make_shared<egt::ImageButton>(egt::Image("icon:clouda.png;64"));
+    auto clouda_button = std::make_shared<egt::ImageButton>(egt::Image(img_clouda));
     clouda_button->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent);
     clouda_button->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent, egt::Palette::GroupId::active);
-    title_right_box.add(right(clouda_button));
+    //title_right_box.add(right(clouda_button));
 
-    auto wifi_button = std::make_shared<egt::ImageButton>(egt::Image("icon:wifi.png;64"));
+    auto wifi_button = std::make_shared<egt::ImageButton>(egt::Image(img_wifi));
     wifi_button->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent);
     wifi_button->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent, egt::Palette::GroupId::active);
     title_right_box.add(right(wifi_button));
@@ -1242,17 +1520,17 @@ int main(int argc, char** argv)
     page1_top_box.color(Palette::ColorId::bg, Palette::blue);
     page1_main_box.add(expand(page1_top_box));
 
-    std::string item1_mode_text = "Item1 : 30A Mode";
-    std::string item2_mode_text = "Item2 : 30A Mode";
-    std::string item3_mode_text = "Item3 : 30A Mode";
+    std::string item1_mode_text = group1_set_30a;
+    std::string item2_mode_text = group2_set_30a;
+    std::string item3_mode_text = group3_set_30a;
     std::string combined = item1_mode_text + "\n" + item2_mode_text + "\n" + item3_mode_text;
     Button mode_view_button(combined);
-    mode_view_button.font(Font("Times New Roman", 32));
+    mode_view_button.font(Font("Noto Sans CJK TC", 32));
     mode_view_button.resize(Size(330, 120));
     page1_top_box.add(mode_view_button);
     
-    Button time_setting_button("TIME");
-    time_setting_button.font(Font("Times New Roman", 32));
+    Button time_setting_button(u8"");
+    time_setting_button.font(Font("Noto Sans CJK TC", 32));
     time_setting_button.resize(Size(330, 120));
     page1_top_box.add(time_setting_button);
 
@@ -1329,8 +1607,8 @@ int main(int argc, char** argv)
     time_top_box.padding(20);
     time_main_box.add(expand(time_top_box));
 
-    Button time_switch_button("DATE/TIME");
-    time_switch_button.font(Font("Times New Roman", 32));
+    Button time_switch_button(u8"");
+    time_switch_button.font(Font("Noto Sans CJK TC", 32));
     time_switch_button.resize(Size(330, 120));
     time_top_box.add(time_switch_button);
 
@@ -1346,18 +1624,18 @@ int main(int argc, char** argv)
     VerticalBoxSizer time_bottom_group_box3(egt::Justification::justify);
     time_bottom_box.add(expand(time_bottom_group_box3));
 
-    auto time_label1 = std::make_shared<egt::Label>("Year()");        
-    time_label1->font(egt::Font("Times New Roman", 40, egt::Font::Weight::bold));
+    auto time_label1 = std::make_shared<egt::Label>(label_year + "()");        
+    time_label1->font(egt::Font("Noto Sans CJK TC", 40, egt::Font::Weight::bold));
     time_label1->color(egt::Palette::ColorId::label_text, egt::Palette::black);
     time_bottom_group_box1.add(expand(time_label1));
 
-    auto time_label2 = std::make_shared<egt::Label>("Month()");        
-    time_label2->font(egt::Font("Times New Roman", 40, egt::Font::Weight::bold));
+    auto time_label2 = std::make_shared<egt::Label>(label_month + "()");        
+    time_label2->font(egt::Font("Noto Sans CJK TC", 40, egt::Font::Weight::bold));
     time_label2->color(egt::Palette::ColorId::label_text, egt::Palette::black);
     time_bottom_group_box2.add(expand(time_label2));
 
-    auto time_label3 = std::make_shared<egt::Label>("Day()");        
-    time_label3->font(egt::Font("Times New Roman", 40, egt::Font::Weight::bold));
+    auto time_label3 = std::make_shared<egt::Label>(label_day + "()");        
+    time_label3->font(egt::Font("Noto Sans CJK TC", 40, egt::Font::Weight::bold));
     time_label3->color(egt::Palette::ColorId::label_text, egt::Palette::black);
     time_bottom_group_box3.add(expand(time_label3));
 
@@ -1417,29 +1695,29 @@ int main(int argc, char** argv)
     ct_item_button.resize(Size(60, 60));
     ct_top_box.add(ct_item_button);
 
-    auto ct_status1 = std::make_shared<egt::ImageLabel>(egt::Image("file:image/green_rectangle.png"));
+    auto ct_status1 = std::make_shared<egt::ImageLabel>(egt::Image(img_green));
     ct_top_box.add(ct_status1);
-    auto ct_status2 = std::make_shared<egt::ImageLabel>(egt::Image("file:image/white_rectangle.png"));
+    auto ct_status2 = std::make_shared<egt::ImageLabel>(egt::Image(img_white));
     ct_top_box.add(ct_status2);
-    auto ct_status3 = std::make_shared<egt::ImageLabel>(egt::Image("file:image/white_rectangle.png"));
+    auto ct_status3 = std::make_shared<egt::ImageLabel>(egt::Image(img_white));
     ct_top_box.add(ct_status3);
-    auto ct_status4 = std::make_shared<egt::ImageLabel>(egt::Image("file:image/white_rectangle.png"));
+    auto ct_status4 = std::make_shared<egt::ImageLabel>(egt::Image(img_white));
     ct_top_box.add(ct_status4);
-    auto ct_status5 = std::make_shared<egt::ImageLabel>(egt::Image("file:image/white_rectangle.png"));
+    auto ct_status5 = std::make_shared<egt::ImageLabel>(egt::Image(img_white));
     ct_top_box.add(ct_status5);
-    auto ct_status6 = std::make_shared<egt::ImageLabel>(egt::Image("file:image/white_rectangle.png"));
+    auto ct_status6 = std::make_shared<egt::ImageLabel>(egt::Image(img_white));
     ct_top_box.add(ct_status6);
-    auto ct_status7 = std::make_shared<egt::ImageLabel>(egt::Image("file:image/white_rectangle.png"));
+    auto ct_status7 = std::make_shared<egt::ImageLabel>(egt::Image(img_white));
     ct_top_box.add(ct_status7);
-    auto ct_status8 = std::make_shared<egt::ImageLabel>(egt::Image("file:image/white_rectangle.png"));
+    auto ct_status8 = std::make_shared<egt::ImageLabel>(egt::Image(img_white));
     ct_top_box.add(ct_status8);
-    auto ct_status9 = std::make_shared<egt::ImageLabel>(egt::Image("file:image/white_rectangle.png"));
+    auto ct_status9 = std::make_shared<egt::ImageLabel>(egt::Image(img_white));
     ct_top_box.add(ct_status9);
-    auto ct_status10 = std::make_shared<egt::ImageLabel>(egt::Image("file:image/white_rectangle.png"));
+    auto ct_status10 = std::make_shared<egt::ImageLabel>(egt::Image(img_white));
     ct_top_box.add(ct_status10);
-    auto ct_status11 = std::make_shared<egt::ImageLabel>(egt::Image("file:image/white_rectangle.png"));
+    auto ct_status11 = std::make_shared<egt::ImageLabel>(egt::Image(img_white));
     ct_top_box.add(ct_status11);
-    auto ct_status12 = std::make_shared<egt::ImageLabel>(egt::Image("file:image/white_rectangle.png"));
+    auto ct_status12 = std::make_shared<egt::ImageLabel>(egt::Image(img_white));
     ct_top_box.add(ct_status12);
 
     VerticalBoxSizer ct_bottom_box(egt::Justification::middle);
@@ -1451,14 +1729,14 @@ int main(int argc, char** argv)
     //ct_bottom_group_box1.border(2);
     ct_bottom_box.add((ct_bottom_group_box1));
 
-    auto ct_mode_label = std::make_shared<egt::Label>("30A Mode");        
-    ct_mode_label->font(egt::Font("Times New Roman", 28, egt::Font::Weight::bold));
+    auto ct_mode_label = std::make_shared<egt::Label>(ct_mode_label_text);        
+    ct_mode_label->font(egt::Font("Noto Sans CJK TC", 28, egt::Font::Weight::bold));
     ct_mode_label->color(egt::Palette::ColorId::label_text, egt::Palette::black);
     ct_mode_label->margin(15);
     ct_bottom_group_box1.add((ct_mode_label));
 
     auto ct_time_label = std::make_shared<egt::Label>("");        
-    ct_time_label->font(egt::Font("Times New Roman", 28, egt::Font::Weight::bold));
+    ct_time_label->font(egt::Font("Noto Sans CJK TC", 28, egt::Font::Weight::bold));
     ct_time_label->color(egt::Palette::ColorId::label_text, egt::Palette::black);
     ct_time_label->margin(15);
     ct_bottom_group_box1.add((ct_time_label));
@@ -1484,6 +1762,34 @@ int main(int argc, char** argv)
     ct_next_data_button->color(egt::Palette::ColorId::button_bg, egt::Palette::transparent, egt::Palette::GroupId::active);
     ct_next_data_button->align(egt::AlignFlag::right);
     ct_bottom_box.add(ct_next_data_button);
+
+    egt::PeriodicTimer time_timer(std::chrono::milliseconds(500));
+    std::string time_formatted_time;
+    time_timer.on_timeout([&]()
+    {
+        static std::atomic<bool> busy{false};
+        if (busy)
+            return;
+        busy = true;
+
+        current_time = get_current_time();
+        time_formatted_time = format_date_time(current_time);
+        // 將空格改為換行，變成兩行
+        size_t space_pos = time_formatted_time.find(' ');
+        if (space_pos != std::string::npos)
+        {
+            time_formatted_time.replace(space_pos, 1, "\n");
+        }
+        std::string time_text = time_title_label_prefix + time_formatted_time;
+        
+        time_switch_button.text(time_text);
+        time_setting_button.text(time_text);
+        busy = false;
+        
+    });
+    time_timer.start();
+
+
     egt::PeriodicTimer ct_timer(std::chrono::milliseconds(500));
     std::string formatted_time;
     
@@ -1497,9 +1803,9 @@ int main(int argc, char** argv)
 
         current_time = get_current_time();
         formatted_time = format_date_time(current_time);
-
+        std::string time_text = time_title_label_prefix + formatted_time;
         
-        ct_time_label->text(formatted_time);
+        ct_time_label->text(time_text);
 
         // 依 current_ct_group 選取對應的資料陣列
         const std::vector<std::string>* current_list = nullptr;
@@ -1582,143 +1888,143 @@ int main(int argc, char** argv)
         
         switch(current_ct_item) {
             case 0:
-                ct_status1->image(egt::Image("file:image/white_rectangle.png"));
-                ct_status8->image(egt::Image("file:image/white_rectangle.png"));
-                ct_status10->image(egt::Image("file:image/white_rectangle.png"));
-                ct_status12->image(egt::Image("file:image/white_rectangle.png"));
+                ct_status1->image(egt::Image(img_white));
+                ct_status8->image(egt::Image(img_white));
+                ct_status10->image(egt::Image(img_white));
+                ct_status12->image(egt::Image(img_white));
                 if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
-                    ct_status1->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status1->image(egt::Image(img_green));
                 }
                 else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status1->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status1->image(egt::Image(img_green));
                 }
                 else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status1->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status1->image(egt::Image(img_green));
                 }    
             break;
             case 1:
-                ct_status2->image(egt::Image("file:image/white_rectangle.png"));
-                ct_status1->image(egt::Image("file:image/white_rectangle.png"));
+                ct_status2->image(egt::Image(img_white));
+                ct_status1->image(egt::Image(img_white));
                 if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
-                    ct_status2->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status2->image(egt::Image(img_green));
                 }
                 else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status2->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status2->image(egt::Image(img_green));
                 }
                 else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status2->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status2->image(egt::Image(img_green));
                 } 
             break;
             case 2:
-                ct_status3->image(egt::Image("file:image/white_rectangle.png"));
-                ct_status2->image(egt::Image("file:image/white_rectangle.png"));
+                ct_status3->image(egt::Image(img_white));
+                ct_status2->image(egt::Image(img_white));
                 if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
-                    ct_status3->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status3->image(egt::Image(img_green));
                 }
                 else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status3->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status3->image(egt::Image(img_green));
                 }
                 else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status3->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status3->image(egt::Image(img_green));
                 } 
             break;
             case 3:
-                ct_status4->image(egt::Image("file:image/white_rectangle.png"));
-                ct_status3->image(egt::Image("file:image/white_rectangle.png"));
+                ct_status4->image(egt::Image(img_white));
+                ct_status3->image(egt::Image(img_white));
                 if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
-                    ct_status4->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status4->image(egt::Image(img_green));
                 }
                 else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status4->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status4->image(egt::Image(img_green));
                 }
                 else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status4->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status4->image(egt::Image(img_green));
                 } 
             break;
             case 4:
-                ct_status5->image(egt::Image("file:image/white_rectangle.png"));
-                ct_status4->image(egt::Image("file:image/white_rectangle.png"));
+                ct_status5->image(egt::Image(img_white));
+                ct_status4->image(egt::Image(img_white));
                 if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
-                    ct_status5->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status5->image(egt::Image(img_green));
                 }
                 else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status5->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status5->image(egt::Image(img_green));
                 }
                 else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status5->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status5->image(egt::Image(img_green));
                 } 
             break;
             case 5:
-                ct_status6->image(egt::Image("file:image/white_rectangle.png"));
-                ct_status5->image(egt::Image("file:image/white_rectangle.png"));
+                ct_status6->image(egt::Image(img_white));
+                ct_status5->image(egt::Image(img_white));
                 if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
-                    ct_status6->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status6->image(egt::Image(img_green));
                 }
                 else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status6->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status6->image(egt::Image(img_green));
                 }
                 else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status6->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status6->image(egt::Image(img_green));
                 } 
             break;
             case 6:
-                ct_status7->image(egt::Image("file:image/white_rectangle.png"));
-                ct_status6->image(egt::Image("file:image/white_rectangle.png"));
+                ct_status7->image(egt::Image(img_white));
+                ct_status6->image(egt::Image(img_white));
                 if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
-                    ct_status7->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status7->image(egt::Image(img_green));
                 }
                 else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status7->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status7->image(egt::Image(img_green));
                 }
                 else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status7->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status7->image(egt::Image(img_green));
                 } 
             break;
             case 7:
-                ct_status8->image(egt::Image("file:image/white_rectangle.png"));
-                ct_status7->image(egt::Image("file:image/white_rectangle.png"));
+                ct_status8->image(egt::Image(img_white));
+                ct_status7->image(egt::Image(img_white));
                 if(current_ct_group == 0 && ct_current_data_list1[1][current_ct_item] != "0.00 A"){
-                    ct_status8->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status8->image(egt::Image(img_green));
                 }
                 else if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status8->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status8->image(egt::Image(img_green));
                 }
                 else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status8->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status8->image(egt::Image(img_green));
                 } 
             break;
             case 8:
-                ct_status9->image(egt::Image("file:image/white_rectangle.png"));
-                ct_status8->image(egt::Image("file:image/white_rectangle.png"));
+                ct_status9->image(egt::Image(img_white));
+                ct_status8->image(egt::Image(img_white));
                 if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status9->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status9->image(egt::Image(img_green));
                 }
                 else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status9->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status9->image(egt::Image(img_green));
                 } 
             break;
             case 9:
-                ct_status10->image(egt::Image("file:image/white_rectangle.png"));
-                ct_status9->image(egt::Image("file:image/white_rectangle.png"));
+                ct_status10->image(egt::Image(img_white));
+                ct_status9->image(egt::Image(img_white));
                 if(current_ct_group == 1 && ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-                    ct_status10->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status10->image(egt::Image(img_green));
                 }
                 else if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status10->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status10->image(egt::Image(img_green));
                 } 
             break;
             case 10:
-                ct_status11->image(egt::Image("file:image/white_rectangle.png"));
-                ct_status10->image(egt::Image("file:image/white_rectangle.png"));
+                ct_status11->image(egt::Image(img_white));
+                ct_status10->image(egt::Image(img_white));
                 if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status11->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status11->image(egt::Image(img_green));
                 }
             break;
             case 11:
-                ct_status12->image(egt::Image("file:image/white_rectangle.png"));
-                ct_status11->image(egt::Image("file:image/white_rectangle.png"));
+                ct_status12->image(egt::Image(img_white));
+                ct_status11->image(egt::Image(img_white));
                 if(current_ct_group == 2 && ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-                    ct_status12->image(egt::Image("file:image/green_rectangle.png"));
+                    ct_status12->image(egt::Image(img_green));
                 }
             break;
         }
@@ -1741,22 +2047,23 @@ int main(int argc, char** argv)
         ct_top_box.add(ct_status6);
         ct_top_box.add(ct_status7);
         ct_top_box.add(ct_status8);
-        ct_status1->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status2->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status3->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status4->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status5->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status6->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status7->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status8->image(egt::Image("file:image/white_rectangle.png"));
+        ct_status1->image(egt::Image(img_white));
+        ct_status2->image(egt::Image(img_white));
+        ct_status3->image(egt::Image(img_white));
+        ct_status4->image(egt::Image(img_white));
+        ct_status5->image(egt::Image(img_white));
+        ct_status6->image(egt::Image(img_white));
+        ct_status7->image(egt::Image(img_white));
+        ct_status8->image(egt::Image(img_white));
         if(ct_current_data_list1[1][current_ct_item] != "0.00 A"){
-            ct_status1->image(egt::Image("file:image/green_rectangle.png"));
+            ct_status1->image(egt::Image(img_green));
         }
         std::string ct_label_text = extract_mode_text(item1_mode_text);
         ct_mode_label->text(ct_label_text);
         current_time = get_current_time();
         formatted_time = format_date_time(current_time);
-        ct_time_label->text(formatted_time);
+        std::string time_text = time_title_label_prefix + formatted_time;
+        ct_time_label->text(time_text);
         ct_timer.start();
         main_box.remove_all();
         wifi_toggle->hide();
@@ -1783,24 +2090,25 @@ int main(int argc, char** argv)
         ct_top_box.add(ct_status8);
         ct_top_box.add(ct_status9);
         ct_top_box.add(ct_status10);
-        ct_status1->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status2->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status3->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status4->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status5->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status6->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status7->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status8->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status9->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status10->image(egt::Image("file:image/white_rectangle.png"));
+        ct_status1->image(egt::Image(img_white));
+        ct_status2->image(egt::Image(img_white));
+        ct_status3->image(egt::Image(img_white));
+        ct_status4->image(egt::Image(img_white));
+        ct_status5->image(egt::Image(img_white));
+        ct_status6->image(egt::Image(img_white));
+        ct_status7->image(egt::Image(img_white));
+        ct_status8->image(egt::Image(img_white));
+        ct_status9->image(egt::Image(img_white));
+        ct_status10->image(egt::Image(img_white));
         if(ct_current_data_list2[1][current_ct_item] != "0.00 A"){
-            ct_status1->image(egt::Image("file:image/green_rectangle.png"));
+            ct_status1->image(egt::Image(img_green));
         }
         std::string ct_label_text = extract_mode_text(item2_mode_text);
         ct_mode_label->text(ct_label_text);
         current_time = get_current_time();
         formatted_time = format_date_time(current_time);
-        ct_time_label->text(formatted_time);
+        std::string time_text = time_title_label_prefix + formatted_time;
+        ct_time_label->text(time_text);
         ct_timer.start();
         main_box.remove_all();
         wifi_toggle->hide();
@@ -1829,26 +2137,27 @@ int main(int argc, char** argv)
         ct_top_box.add(ct_status10);
         ct_top_box.add(ct_status11);
         ct_top_box.add(ct_status12);
-        ct_status1->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status2->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status3->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status4->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status5->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status6->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status7->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status8->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status9->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status10->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status11->image(egt::Image("file:image/white_rectangle.png"));
-        ct_status12->image(egt::Image("file:image/white_rectangle.png"));
+        ct_status1->image(egt::Image(img_white));
+        ct_status2->image(egt::Image(img_white));
+        ct_status3->image(egt::Image(img_white));
+        ct_status4->image(egt::Image(img_white));
+        ct_status5->image(egt::Image(img_white));
+        ct_status6->image(egt::Image(img_white));
+        ct_status7->image(egt::Image(img_white));
+        ct_status8->image(egt::Image(img_white));
+        ct_status9->image(egt::Image(img_white));
+        ct_status10->image(egt::Image(img_white));
+        ct_status11->image(egt::Image(img_white));
+        ct_status12->image(egt::Image(img_white));
         if(ct_current_data_list3[1][current_ct_item] != "0.00 A"){
-            ct_status1->image(egt::Image("file:image/green_rectangle.png"));
+            ct_status1->image(egt::Image(img_green));
         }
         std::string ct_label_text = extract_mode_text(item3_mode_text);
         ct_mode_label->text(ct_label_text);
         current_time = get_current_time();
         formatted_time = format_date_time(current_time);
-        ct_time_label->text(formatted_time);
+        std::string time_text = time_title_label_prefix + formatted_time;
+        ct_time_label->text(time_text);
         ct_timer.start();
         main_box.remove_all();
         wifi_toggle->hide();
@@ -1866,9 +2175,9 @@ int main(int argc, char** argv)
                     max_days_in_month = days_in_month(current_time.year, current_time.month);
                     if (current_time.day > max_days_in_month){
                         current_time.day = max_days_in_month;
-                        time_label3->text("Day(" + std::to_string(current_time.day) + ")");
+                        time_label3->text(label_day + "(" + std::to_string(current_time.day) + ")");
                     }
-                    time_label1->text("Year(" + std::to_string(current_time.year) + ")");
+                    time_label1->text(label_year + "(" + std::to_string(current_time.year) + ")");
                     //set_system_time(current_time);
                 }
                 break;
@@ -1876,7 +2185,7 @@ int main(int argc, char** argv)
             case TIMESET_TYPE::TIME:
                 if (current_time.hour < 23) {
                     current_time.hour++;
-                    time_label1->text("Hour(" + std::to_string(current_time.hour) + ")");
+                    time_label1->text(label_hour + "(" + std::to_string(current_time.hour) + ")");
                     //set_system_time(current_time);
                 }
                 break;
@@ -1895,9 +2204,9 @@ int main(int argc, char** argv)
                     max_days_in_month = days_in_month(current_time.year, current_time.month);
                     if (current_time.day > max_days_in_month){
                         current_time.day = max_days_in_month;
-                        time_label3->text("Day(" + std::to_string(current_time.day) + ")");
+                        time_label3->text(label_day + "(" + std::to_string(current_time.day) + ")");
                     }
-                    time_label1->text("Year(" + std::to_string(current_time.year) + ")");
+                    time_label1->text(label_year + "(" + std::to_string(current_time.year) + ")");
                     //set_system_time(current_time);
                 }
                 
@@ -1906,7 +2215,7 @@ int main(int argc, char** argv)
             case TIMESET_TYPE::TIME:
                 if (current_time.hour > 0) {
                     current_time.hour--;
-                    time_label1->text("Hour(" + std::to_string(current_time.hour) + ")");
+                    time_label1->text(label_hour + "(" + std::to_string(current_time.hour) + ")");
                     //set_system_time(current_time);
                 }
                 break;
@@ -1925,9 +2234,9 @@ int main(int argc, char** argv)
                     max_days_in_month = days_in_month(current_time.year, current_time.month);
                     if (current_time.day > max_days_in_month){
                         current_time.day = max_days_in_month;
-                        time_label3->text("Day(" + std::to_string(current_time.day) + ")");
+                        time_label3->text(label_day + "(" + std::to_string(current_time.day) + ")");
                     }
-                    time_label2->text("Month(" + std::to_string(current_time.month) + ")");
+                    time_label2->text(label_month + "(" + std::to_string(current_time.month) + ")");
                     //set_system_time(current_time);
                 }
                 break;
@@ -1935,7 +2244,7 @@ int main(int argc, char** argv)
             case TIMESET_TYPE::TIME:
                 if (current_time.minute < 59) {
                     current_time.minute++;
-                    time_label2->text("Minute(" + std::to_string(current_time.minute) + ")");
+                    time_label2->text(label_minute + "(" + std::to_string(current_time.minute) + ")");
                     //set_system_time(current_time);
                 }
                 break;
@@ -1954,9 +2263,9 @@ int main(int argc, char** argv)
                     max_days_in_month = days_in_month(current_time.year, current_time.month);
                     if (current_time.day > max_days_in_month){
                         current_time.day = max_days_in_month;
-                        time_label3->text("Day(" + std::to_string(current_time.day) + ")");
+                        time_label3->text(label_day + "(" + std::to_string(current_time.day) + ")");
                     }
-                    time_label2->text("Month(" + std::to_string(current_time.month) + ")");
+                    time_label2->text(label_month + "(" + std::to_string(current_time.month) + ")");
                     //set_system_time(current_time);
                 }
                 break;
@@ -1964,7 +2273,7 @@ int main(int argc, char** argv)
             case TIMESET_TYPE::TIME:
                 if (current_time.minute > 0) {
                     current_time.minute--;
-                    time_label2->text("Minute(" + std::to_string(current_time.minute) + ")");
+                    time_label2->text(label_minute + "(" + std::to_string(current_time.minute) + ")");
                     //set_system_time(current_time);
                 }
                 break;
@@ -1980,7 +2289,7 @@ int main(int argc, char** argv)
             case TIMESET_TYPE::DATE:
                 if (current_time.day < max_days_in_month) {
                     current_time.day++;
-                    time_label3->text("Day(" + std::to_string(current_time.day) + ")");
+                    time_label3->text(label_day + "(" + std::to_string(current_time.day) + ")");
                     //set_system_time(current_time);
                 }
                 break;
@@ -1988,7 +2297,7 @@ int main(int argc, char** argv)
             case TIMESET_TYPE::TIME:
                 if (current_time.second < 59) {
                     current_time.second++;
-                    time_label3->text("Second(" + std::to_string(current_time.second) + ")");
+                    time_label3->text(label_second + "(" + std::to_string(current_time.second) + ")");
                     //set_system_time(current_time);
                 }
                 break;
@@ -2004,7 +2313,7 @@ int main(int argc, char** argv)
             case TIMESET_TYPE::DATE:
                 if (current_time.day > 1) {
                     current_time.day--;
-                    time_label3->text("Day(" + std::to_string(current_time.day) + ")");
+                    time_label3->text(label_day + "(" + std::to_string(current_time.day) + ")");
                     //set_system_time(current_time);
                 } 
                 break;
@@ -2012,7 +2321,7 @@ int main(int argc, char** argv)
             case TIMESET_TYPE::TIME:
                 if (current_time.second > 0) {
                     current_time.second--;
-                    time_label3->text("Second(" + std::to_string(current_time.second) + ")");
+                    time_label3->text(label_second + "(" + std::to_string(current_time.second) + ")");
                     //set_system_time(current_time);
                 }
                 break;
@@ -2024,19 +2333,21 @@ int main(int argc, char** argv)
     time_switch_button.on_click([&](egt::Event &)
     {
         buzzer_on_button_click();
-        update_state(&page_state, IN_TIME_SETTING, dummy_time);
+        if(wifi_reset_blocked){
+            update_state(&page_state, IN_TIME_SETTING, dummy_time);
+        }
         switch (time_set_type) {
             case TIMESET_TYPE::DATE:
-                time_label1->text("Hour(" + std::to_string(current_time.hour) + ")");
-                time_label2->text("Minute(" + std::to_string(current_time.minute) + ")");
-                time_label3->text("Second(" + std::to_string(current_time.second) + ")");
+                time_label1->text(label_hour + "(" + std::to_string(current_time.hour) + ")");
+                time_label2->text(label_minute + "(" + std::to_string(current_time.minute) + ")");
+                time_label3->text(label_second + "(" + std::to_string(current_time.second) + ")");
                 time_set_type = TIMESET_TYPE::TIME;
                 break;
 
             case TIMESET_TYPE::TIME:
-                time_label1->text("Year(" + std::to_string(current_time.year) + ")");
-                time_label2->text("Month(" + std::to_string(current_time.month) + ")");
-                time_label3->text("Day(" + std::to_string(current_time.day) + ")");
+                time_label1->text(label_year + "(" + std::to_string(current_time.year) + ")");
+                time_label2->text(label_month + "(" + std::to_string(current_time.month) + ")");
+                time_label3->text(label_day + "(" + std::to_string(current_time.day) + ")");
                 time_set_type = TIMESET_TYPE::DATE;
                 break;
 
@@ -2048,15 +2359,17 @@ int main(int argc, char** argv)
     time_setting_button.on_click([&](egt::Event &)
     {
         buzzer_on_button_click();
-        update_state(&page_state, IN_TIME_SETTING, dummy_time);
+        if(wifi_reset_blocked){
+            update_state(&page_state, IN_TIME_SETTING, dummy_time);
+        }
         current_time = get_current_time();
         max_days_in_month = days_in_month(current_time.year, current_time.month);
         time_set_type = TIMESET_TYPE::DATE;
         main_box.remove_all();
         main_box.add(expand_horizontal(title_main_box));
-        time_label1->text("Year(" + std::to_string(current_time.year) + ")");
-        time_label2->text("Month(" + std::to_string(current_time.month) + ")");
-        time_label3->text("Day(" + std::to_string(current_time.day) + ")");
+        time_label1->text(label_year + "(" + std::to_string(current_time.year) + ")");
+        time_label2->text(label_month + "(" + std::to_string(current_time.month) + ")");
+        time_label3->text(label_day + "(" + std::to_string(current_time.day) + ")");
         main_box.add(expand(time_main_box));
     });
 
@@ -2085,10 +2398,10 @@ int main(int argc, char** argv)
 
             if (group1_toggle1->checked()) {
                 CT_group1_status = false;
-                item1_mode_text = "Item1 : 30A Mode";
+                item1_mode_text = group1_set_30a;
             } else {
                 CT_group1_status = true;
-                item1_mode_text = "Item1 : 50A Mode";
+                item1_mode_text = group1_set_50a;
             }
 
             combined = item1_mode_text + "\n" + item2_mode_text + "\n" + item3_mode_text;
@@ -2100,11 +2413,11 @@ int main(int argc, char** argv)
             buzzer_on_button_click();
             if (group1_toggle2->checked()){
                 CT_group2_status = false;
-                item2_mode_text = "Item2 : 30A Mode";
+                item2_mode_text = group2_set_30a;
             }
             else{
                 CT_group2_status = true;
-                item2_mode_text = "Item2 : 50A Mode";
+                item2_mode_text = group2_set_50a;
             }
             combined = item1_mode_text + "\n" + item2_mode_text + "\n" + item3_mode_text;
             mode_view_button.text(combined);
@@ -2116,11 +2429,11 @@ int main(int argc, char** argv)
             buzzer_on_button_click();
             if (group1_toggle3->checked()){
                 CT_group3_status = false;
-                item3_mode_text = "Item3 : 30A Mode";
+                item3_mode_text = group3_set_30a;
             }
             else{
                 CT_group3_status = true;
-                item3_mode_text = "Item3 : 50A Mode";
+                item3_mode_text = group3_set_50a;
             }
             combined = item1_mode_text + "\n" + item2_mode_text + "\n" + item3_mode_text;
             mode_view_button.text(combined);
@@ -2159,7 +2472,7 @@ int main(int argc, char** argv)
         }
         busy = true;
 
-        float voltage = adc(RTC_BAT_PATH);
+        voltage = adc(RTC_BAT_PATH);
         status = voltage_to_status(voltage);
         network_ok = isEth0Up();
 
@@ -2182,40 +2495,38 @@ int main(int argc, char** argv)
 
         clouda_button->image(egt::Image(network_ok ? img_clouda : img_warning));
         wifi_button->image(egt::Image(wifi_reset_blocked ? img_cancel : img_wifi));
+
         busy = false;
-        // app.event().add_idle_callback([=]() mutable {
-        //     // 在主線程更新 UI
-        //     if (label_status) {
-        //         label_status->text(wifi_text_copy);
-        //         label_status->damage();
-        //         last_wifi_text = wifi_text_copy;
-        //     }
-
-        //     switch (status_copy) {
-        //         case STATUS_EMPTY:
-        //             battery_label->image(egt::Image(img_battery_empty));
-        //             break;
-        //         case STATUS_LOW:
-        //             battery_label->image(egt::Image(img_battery_low));
-        //             break;
-        //         case STATUS_NORMAL:
-        //             battery_label->image(egt::Image(img_battery_normal));
-        //             break;
-        //     }
-
-        //     bat_status = status_copy;
-        //     clouda_button->image(egt::Image(network_ok_copy ? img_clouda : img_warning));
-        //     network_status = network_ok_copy;
-        //     wifi_button->image(egt::Image(wifi_reset_blocked_copy ? img_cancel : img_wifi));
-        //     wifi_status = wifi_reset_blocked_copy;
-
-        //     busy = false; // UI 更新完成後，才解除 busy
-
-        //     return false; // callback 只執行一次
-        // });
-
         
     });
+    std::thread([&]() {
+        while (1) {
+            if(sync_time_status){
+                if(syncTimeCount >= cfg.synctime_count_max){
+                    int read_time_ret = TRANSMIT_UNKNOWN_RESPONSE;
+                    for (int attempts = 0; attempts < 3; ++attempts) {
+                        read_time_ret = uartReadWifiTime();
+                        if (read_time_ret == TRANSMIT_OK) {
+                            break;
+                        }
+                    }
+                    if(read_time_ret != TRANSMIT_OK){
+                        sync_time_status = false;
+                    }
+                    syncTimeCount = 0;
+                }
+                else{
+                    syncTimeCount++;
+                }
+            }
+            else{
+                if (uartReadWifiTime() == TRANSMIT_OK) {
+                    sync_time_status = true;
+                }
+            }
+            usleep(1 * 1000 * 1000);
+        }
+    }).detach();
     bool is_sd_mounted = false;
     std::thread([&]() {
         while(1){
@@ -2281,6 +2592,17 @@ int main(int argc, char** argv)
     // log_timer.start();
     network_timer.start();
     set_brightness(7);
+    int read_time_ret = TRANSMIT_UNKNOWN_RESPONSE;
+    for (int attempts = 0; attempts < 3; ++attempts) {
+        read_time_ret = uartReadWifiTime();
+        if (read_time_ret == TRANSMIT_OK) {
+            sync_time_status = true;
+            break;
+        }
+    }
+    if (read_time_ret != TRANSMIT_OK) {
+        sync_time_status = false;
+    }
     write_controlboard_set_time();
     std::thread read_controlboard_thread(read_controlboard_data_thread);
     read_controlboard_thread.detach();

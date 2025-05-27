@@ -26,15 +26,63 @@
 #include <cstdio>
 #include <random>
 #include <mutex>
+#include <linux/rtc.h>
 #include "uart.h"
 #include "sd.h"
 #include "gpio.h"
 #include "math.h"
 #include "adc.h"
 #define PROJECT_NAME "holystone_ame"
-#define VERSION "v2.0"
+#define VERSION "v2.1"
 #define CONTROL_BOARD_BUFFER_SIZE 1024  // 緩衝區大小
 #define CONTROL_BOARD_MAX_PACKET_SIZE 64     // 假設最大封包大小
+#define LANGUAGE_ZH 1  // 設為 1 表示中文；設為 0 表示英文
+
+#if LANGUAGE_ZH
+const std::string time_title_label_prefix = u8"目前時間\n";
+const std::string label_year   = u8"年";
+const std::string label_month  = u8"月";
+const std::string label_day    = u8"日";
+const std::string label_hour   = u8"時";
+const std::string label_minute = u8"分";
+const std::string label_second = u8"秒";
+const std::string group1_set_30a = u8"第1組 : 30A 模式";
+const std::string group1_set_50a = u8"第1組 : 50A 模式";
+const std::string group2_set_30a = u8"第2組 : 30A 模式";
+const std::string group2_set_50a = u8"第2組 : 50A 模式";
+const std::string group3_set_30a = u8"第3組 : 30A 模式";
+const std::string group3_set_50a = u8"第3組 : 50A 模式";
+const std::string ct_mode_label_text = u8"30A 模式";
+const std::string wifi_toggle_off = u8"關";
+const std::string wifi_toggle_on = u8"開";
+const std::string wifi_status = u8"WiFi狀態";
+const std::string wifi_connect = u8"已連線";
+const std::string wifi_connect_fail = u8"連線失敗";
+const std::string wifi_not_start= u8"啟動失敗";
+std::string wifi_status_text = u8"WiFi初始化";
+#else
+const std::string time_title_label_prefix = "Current Time\n";
+const std::string label_year   = "Year";
+const std::string label_month  = "Month";
+const std::string label_day    = "Day";
+const std::string label_hour   = "Hour";
+const std::string label_minute = "Min";
+const std::string label_second = "Sec";
+const std::string group1_set_30a = u8"Item1 : 30A Mode";
+const std::string group1_set_50a = u8"Item1 : 50A Mode";
+const std::string group2_set_30a = u8"Item2 : 30A Mode";
+const std::string group2_set_50a = u8"Item2 : 50A Mode";
+const std::string group3_set_30a = u8"Item3 : 30A Mode";
+const std::string group3_set_50a = u8"Item3 : 50A Mode";
+const std::string ct_mode_label_text = "30A Mode";
+const std::string wifi_toggle_off = "OFF";
+const std::string wifi_toggle_on = "ON";
+const std::string wifi_status = "WiFi Status";
+const std::string wifi_connect = "Connected";
+const std::string wifi_connect_fail = "Connection failed";
+const std::string wifi_not_start= "Not Started";
+std::string wifi_status_text = "WiFi init";
+#endif
 
 uint8_t control_board_buffer[CONTROL_BOARD_BUFFER_SIZE];  // 用來儲存從 UART 讀取的資料
 size_t control_board_buffer_len = 0;  // 當前緩衝區的資料長度
@@ -42,6 +90,7 @@ size_t control_board_buffer_len = 0;  // 當前緩衝區的資料長度
 const char* GPIO_PATH = "/dev/gpiochip0";
 const char* RTC_BAT_PATH = "/sys/bus/iio/devices/iio:device0/in_voltage6_raw";
 const char* WIFI_UART1_PATH = "/dev/ttyS1";
+const char* WIFI_UART2_PATH = "/dev/ttyS3";
 const char* CONTROL_UART2_PATH = "/dev/ttyS2";
 const std::string sd_device = "/dev/mmcblk0p1";
 const std::string mount_point = "/mnt/sd";
@@ -64,11 +113,12 @@ bool CT_group2_status = false;
 bool CT_group3_status = false;
 int current_ct_group;
 int current_ct_item;
-std::string wifi_status_text = "WiFi status not set";
+int syncTimeCount = 0;
 bool wifi_reset_status = true;
 bool backlight_status = false;
 bool network_ok = true;
-
+bool sync_time_status = false;
+float voltage = 0.0;
 
 static egt::Image img_battery_empty("icon:battery_empty.png;64");
 static egt::Image img_battery_low("icon:battery_low.png;64");
@@ -100,8 +150,11 @@ typedef struct {
     int backlight_sleep_timer = 30;
     int backlight_sleep_level = 6;
     int poweroff_timer = 2;
+    int synctime_count_max = 300; 
 } config_t;
+
 enum class TIMESET_TYPE { DATE, TIME };
+
 struct DateTime {
     int year;
     int month;
@@ -144,7 +197,40 @@ typedef struct __attribute__((packed)) {
     uint8_t crc_low;
     uint8_t crc_high;
 } TransmitCurrentPacket;
-
+typedef struct __attribute__((packed)) {
+    uint8_t bat_num;
+    uint8_t function;
+    uint8_t data_len;
+    uint8_t high_byte;
+    uint8_t low_byte;
+    uint8_t crc_low;
+    uint8_t crc_high;
+} TransmitBatteryPacket;
+typedef struct __attribute__((packed)) {
+    uint8_t id;
+    uint8_t function;
+    uint8_t data_len;
+    uint8_t high_byte;
+    uint8_t low_byte;
+    uint8_t crc_low;
+    uint8_t crc_high;
+} CheckWifiPacket;
+typedef struct __attribute__((packed)) {
+    uint8_t id;
+    uint8_t function;
+    uint8_t high_byte;
+    uint8_t low_byte;
+    uint8_t crc_low;
+    uint8_t crc_high;
+} ReadWifiTimePacket;
+enum WifiStatus : uint16_t
+{
+    OK = 0x0000,
+    ERR_WIFI_NOT_INIT = 0x3001,
+    ERR_WIFI_NOT_STARTED = 0x3002,
+    ERR_WIFI_CONN = 0x3003,
+    ERR_INVALID_ARG = 0x3004,
+};
 typedef struct __attribute__((packed)) {
     uint8_t power_status : 1;    // Bit 0: 開關機狀態
     uint8_t action_status : 1;   // Bit 1: 動作中
@@ -219,6 +305,7 @@ typedef struct __attribute__((packed)) {
     uint8_t tail;             // 0x00
 } SetTime_ControlPacket_t;
 
+bool isEth0Up(void);
 bool set_brightness(int level);
 uint16_t calibrate_current(uint16_t value, bool sw3_setting, bool ct_group3_status);
 VoltageStatus voltage_to_status(float voltage);
@@ -234,6 +321,9 @@ void send_ct_log_towifi_loop(const std::string& fail_log_filename, int log_reten
 void resned_ct_log_towifi_loop(const std::string& fail_log_filename, int wifi_batch_size);
 void resend_wifi_FailedLog(const std::string& fail_log_filename, int wifi_batch_size);
 int uartTransmitCurrentToWiFi(int ct_num, float current);
+int uartTransmitBatteryToWiFi(float bat_voltage);
+int uartCheckWifiConnect(void);
+int uartReadWifiTime(void);
 void WIFI_reset(void);
 void WIFI_reset_thread(void);
 int copy_csv_to_sd(const std::string& target_dir);
@@ -245,10 +335,11 @@ std::string format_date_time(const DateTime& dt);
 std::string extract_mode_text(const std::string& input_text);
 bool is_leap_year(int year);
 int days_in_month(int year, int month);
-bool isNetworkAvailable();
-DateTime get_current_time();
+bool isNetworkAvailable(void);
+DateTime get_current_time(void);
 void set_system_time(const DateTime& new_time);
-std::vector<std::string> scan_wifi_devices();
+void sync_system_time_to_rtc(void);
+std::vector<std::string> scan_wifi_devices(void);
 void handle_wifi_selection(const std::string& device, egt::ScrolledView& scrollview, egt::PopupVirtualKeyboard& popup_keyboard);
 void update_wifi_page(egt::VerticalBoxSizer& main_box, egt::VerticalBoxSizer& wifi_main_box, egt::ScrolledView& scrollview, egt::PopupVirtualKeyboard& popup_keyboard);
 
