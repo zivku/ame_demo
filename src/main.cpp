@@ -1,6 +1,6 @@
 #include "main.h"
 void resend_wifi_FailedLog(const std::string& fail_log_filename, int wifi_batch_size) {
-    std::lock_guard<std::mutex> lock(fail_log_mutex);
+    std::scoped_lock lock(fail_log_mutex, uart_mutex);
     std::fstream fail_log_file(fail_log_filename, std::ios::in);
     if (!fail_log_file.is_open()) {
         std::cerr << "Failed to open fail log file!" << std::endl;
@@ -53,14 +53,14 @@ void resend_wifi_FailedLog(const std::string& fail_log_filename, int wifi_batch_
         speed_t speed = B115200;
         int vtime = 0 * 10;
         int received_bytes = 0;
-        // uint8_t* recive = uart_transmit(WIFI_UART1_PATH, speed, vtime, transmit_current, transmit_current_len, received_bytes);
-        // std::string response(reinterpret_cast<char*>(recive), received_bytes);
+        uint8_t* recive = uart_transmit(WIFI_UART2_PATH, speed, vtime, transmit_current, transmit_current_len, received_bytes);
+        std::string response(reinterpret_cast<char*>(recive), received_bytes);
 
-        // // 失敗的資料記錄
-        // if (response.find("send ok") == std::string::npos) {
-        //     failed_lines.push_back(line);
-        // }
-        failed_lines.push_back(line);
+        // 失敗的資料記錄
+        if (response.find("send ok") == std::string::npos) {
+            failed_lines.push_back(line);
+        }
+        //failed_lines.push_back(line);
         line_count++;
     }
 
@@ -320,7 +320,7 @@ int uartReadWifiTime(){
         printf("%02X ", raw_ptr[i]);
     }
     std::cout << std::endl;
-
+    std::lock_guard<std::mutex> lock(uart_mutex);
     uint8_t *recive = uart_transmit(WIFI_UART2_PATH, speed, vtime, raw_ptr, sizeof(packet), received_bytes);
 
     std::cout << "Received bytes: " << received_bytes << std::endl;
@@ -852,7 +852,7 @@ void sync_system_time_to_rtc() {
         return;
     }
 
-    std::tm* tm_info = std::localtime(&now);
+    std::tm* tm_info = std::gmtime(&now);
     if (!tm_info) {
         std::cerr << "Failed to convert time_t to tm." << std::endl;
         return;
@@ -1026,10 +1026,11 @@ void send_ct_log_towifi_loop(const std::string& fail_log_filename, int log_reten
                     ct_current_data_list3
                 };
             }
-            
+            is_writing_ct_log = true;
             create_log_file_if_not_exists(fail_log_filename);
             log_current_data("current_data_log_" + get_current_date_string() + ".csv", fail_log_filename, ct_data_groups, log_retention_days, max_failed_log_cache);
             sync();
+            is_writing_ct_log = false;
         }
         else{
             std::cout << "[INFO] CT data not received yet, skipping data logging." << std::endl;
@@ -1121,7 +1122,7 @@ void write_controlboard_set_time(){
     SetTime_ControlPacket_t packet;
     packet.start = 0xAA55;                // little-endian：實際送出為 0x55 0xAA
     packet.length = 0x11;                 // 資料長度
-    packet.host_id = 0xBF64;             // 主機 ID（low byte 0x5B, high byte 0xB2）
+    packet.host_id = 0x1E25;             // 主機 ID（low byte 0x5B, high byte 0xB2）
     packet.customer_code = 0x03;
     packet.model_code = 0x29;
     packet.signal_mode = 0xB9;
@@ -1379,6 +1380,14 @@ void update_state(PageState *state, TimeSettingState new_state, const DateTime& 
 
     if (state->previous == IN_TIME_SETTING &&
         state->current == NOT_IN_TIME_SETTING) {
+        std::cout << "[DEBUG] set_system_time called with: "
+                << current_time.year << "-"
+                << std::setw(2) << std::setfill('0') << current_time.month << "-"
+                << std::setw(2) << std::setfill('0') << current_time.day << " "
+                << std::setw(2) << std::setfill('0') << current_time.hour << ":"
+                << std::setw(2) << std::setfill('0') << current_time.minute << ":"
+                << std::setw(2) << std::setfill('0') << current_time.second
+                << std::endl;
         set_system_time(current_time);
         write_controlboard_set_time();
     }
@@ -1501,6 +1510,15 @@ int main(int argc, char** argv)
     poweroff_timer.on_timeout([&]()
     {
         buzzer_on_button_click();
+        while (is_writing_ct_log) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        if (is_sd_mounted) {
+            int ret = copy_csv_to_sd(mount_point);
+            if (ret != 0) {
+                std::cerr << "[ERROR] Failed to copy CSV to SD, ret=" << ret << std::endl;
+            }
+        }
         sync();  // 同步文件系統
         system("echo mem > /sys/power/state");  // 進入休眠模式
     });    
@@ -1596,6 +1614,7 @@ int main(int argc, char** argv)
 
     //========================time setting page box================================
     DateTime current_time;
+    DateTime display_time;
     TIMESET_TYPE time_set_type;
     int max_days_in_month;
     VerticalBoxSizer time_main_box(egt::Justification::justify);
@@ -1772,8 +1791,8 @@ int main(int argc, char** argv)
             return;
         busy = true;
 
-        current_time = get_current_time();
-        time_formatted_time = format_date_time(current_time);
+        display_time = get_current_time();
+        time_formatted_time = format_date_time(display_time);
         // 將空格改為換行，變成兩行
         size_t space_pos = time_formatted_time.find(' ');
         if (space_pos != std::string::npos)
@@ -2179,6 +2198,7 @@ int main(int argc, char** argv)
                     }
                     time_label1->text(label_year + "(" + std::to_string(current_time.year) + ")");
                     //set_system_time(current_time);
+                    
                 }
                 break;
 
@@ -2527,7 +2547,7 @@ int main(int argc, char** argv)
             usleep(1 * 1000 * 1000);
         }
     }).detach();
-    bool is_sd_mounted = false;
+    
     std::thread([&]() {
         while(1){
             if (!is_sd_mounted) {
@@ -2541,6 +2561,9 @@ int main(int argc, char** argv)
             }
 
             if (is_sd_mounted) {
+                while (is_writing_ct_log) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
                 int ret = copy_csv_to_sd(mount_point);
                 if (ret < 0) {
                     // TODO: 容量不足或寫入失敗時要處理的事情

@@ -33,7 +33,7 @@
 #include "math.h"
 #include "adc.h"
 #define PROJECT_NAME "holystone_ame"
-#define VERSION "v2.1"
+#define VERSION "v2.2"
 #define CONTROL_BOARD_BUFFER_SIZE 1024  // 緩衝區大小
 #define CONTROL_BOARD_MAX_PACKET_SIZE 64     // 假設最大封包大小
 #define LANGUAGE_ZH 1  // 設為 1 表示中文；設為 0 表示英文
@@ -101,24 +101,27 @@ int SYSTEM_LED_GPIO = 96;
 std::mutex fail_log_mutex;
 std::mutex log_mutex;
 std::mutex ct_data_mutex;
+std::mutex uart_mutex;
 namespace fs = std::filesystem;
 using namespace std;
 using namespace egt;
 bool page31_received = false;
 bool page32_received = false;
 bool page33_received = false;
-bool has_ct_data = false;
 bool CT_group1_status = false;
 bool CT_group2_status = false;
 bool CT_group3_status = false;
 int current_ct_group;
 int current_ct_item;
 int syncTimeCount = 0;
-bool wifi_reset_status = true;
-bool backlight_status = false;
-bool network_ok = true;
-bool sync_time_status = false;
 float voltage = 0.0;
+std::atomic<bool> backlight_status{false};
+std::atomic<bool> wifi_reset_status{true};
+std::atomic<bool> network_ok{true};
+std::atomic<bool> sync_time_status{false};
+std::atomic<bool> has_ct_data{false};
+std::atomic<bool> is_writing_ct_log{false};
+std::atomic<bool> is_sd_mounted{false};
 
 static egt::Image img_battery_empty("icon:battery_empty.png;64");
 static egt::Image img_battery_low("icon:battery_low.png;64");
