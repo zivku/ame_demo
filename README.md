@@ -76,9 +76,15 @@
       
 </ul>
 
-12/24 v2.2更新內容 : <br>         
+11/24 v2.2更新內容 : <br>         
 <ul>
      <li>1. [INFO]增加std::atomic<bool> sync_time_status{false};寫入excel flag，確保寫完文件才copy至SD卡</li>  
      <li>2. [INFO] 修改1125行 packet.host_id = 0x1E25; 確保後續驅動版都是此ID</li>   
+      
+</ul>
+
+12/17 v2.2更新內容 : <br>         
+<ul>
+     <li>1. [INFO]main.cpp 64行，新增delete[] recive;，懷疑是沒有釋放malloc導致客戶端使用三天後累積崩潰。</li>    
       
 </ul>

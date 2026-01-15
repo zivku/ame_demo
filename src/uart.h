@@ -8,7 +8,10 @@
 
 // 定义 UART 缓冲区大小
 #define BUF_SIZE 128
-
+int uart_init(const char* DEV_PATH, speed_t baudRate, int vtime);
+int uart_transmit_fast(int fd, uint8_t tx_data[], int tx_len, uint8_t* rx_data, int& received_bytes);
+int uart_read_fast(int fd, uint8_t* rx_buffer, int expected_bytes, int& received_bytes);
+int uart_write_fast(int fd, uint8_t tx_data[], int tx_len);
 /**
  * @brief 通过 UART 发送数据并接收响应数据。
  * @param DEV_PATH UART 设备路径，例如 "/dev/ttyS0"。

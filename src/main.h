@@ -32,13 +32,18 @@
 #include "gpio.h"
 #include "math.h"
 #include "adc.h"
+#include <malloc.h>
 #define PROJECT_NAME "holystone_ame"
 #define VERSION "v2.2"
 #define CONTROL_BOARD_BUFFER_SIZE 1024  // 緩衝區大小
 #define CONTROL_BOARD_MAX_PACKET_SIZE 64     // 假設最大封包大小
-#define LANGUAGE_ZH 1  // 設為 1 表示中文；設為 0 表示英文
+#define LANGUAGE_ZH 1  // 中文
+#define LANGUAGE_EN 0  // 英文
+#define LANGUAGE_VN 0  // 越南語
+#define LANGUAGE_HI 0  // 印地語
 
 #if LANGUAGE_ZH
+const std::string FONT_PATH = "Noto Sans CJK SC";
 const std::string time_title_label_prefix = u8"目前時間\n";
 const std::string label_year   = u8"年";
 const std::string label_month  = u8"月";
@@ -60,7 +65,8 @@ const std::string wifi_connect = u8"已連線";
 const std::string wifi_connect_fail = u8"連線失敗";
 const std::string wifi_not_start= u8"啟動失敗";
 std::string wifi_status_text = u8"WiFi初始化";
-#else
+#elif LANGUAGE_EN
+const std::string FONT_PATH = "Noto Sans";
 const std::string time_title_label_prefix = "Current Time\n";
 const std::string label_year   = "Year";
 const std::string label_month  = "Month";
@@ -82,7 +88,56 @@ const std::string wifi_connect = "Connected";
 const std::string wifi_connect_fail = "Connection failed";
 const std::string wifi_not_start= "Not Started";
 std::string wifi_status_text = "WiFi init";
+#elif LANGUAGE_VN
+const std::string FONT_PATH = "Noto Sans";
+const std::string time_title_label_prefix = u8"Thời gian hiện tại\n";
+const std::string label_year   = u8"Năm";
+const std::string label_month  = u8"Tháng";
+const std::string label_day    = u8"Ngày";
+const std::string label_hour   = u8"Giờ";
+const std::string label_minute = u8"Phút";
+const std::string label_second = u8"Giây";
+const std::string group1_set_30a = u8"Nhóm 1 : Chế độ 30A";
+const std::string group1_set_50a = u8"Nhóm 1 : Chế độ 50A";
+const std::string group2_set_30a = u8"Nhóm 2 : Chế độ 30A";
+const std::string group2_set_50a = u8"Nhóm 2 : Chế độ 50A";
+const std::string group3_set_30a = u8"Nhóm 3 : Chế độ 30A";
+const std::string group3_set_50a = u8"Nhóm 3 : Chế độ 50A";
+const std::string ct_mode_label_text = u8"Chế độ 30A";
+const std::string wifi_toggle_off = u8"Tắt";
+const std::string wifi_toggle_on  = u8"Bật";
+const std::string wifi_status = u8"Trạng thái WiFi";
+const std::string wifi_connect = u8"Đã kết nối";
+const std::string wifi_connect_fail = u8"Kết nối thất bại";
+const std::string wifi_not_start= u8"Không khởi động được";
+std::string wifi_status_text = u8"Khởi tạo WiFi";
+#elif LANGUAGE_HI
+const std::string FONT_PATH = "Noto Sans Devanagari";
+const std::string time_title_label_prefix = u8"वर्तमान समय\n";
+const std::string label_year   = u8"वर्ष";
+const std::string label_month  = u8"माह";
+const std::string label_day    = u8"दिन";
+const std::string label_hour   = u8"घंटा";
+const std::string label_minute = u8"मिनट";
+const std::string label_second = u8"सेकंड";
+const std::string group1_set_30a = u8"समूह 1 : 30A मोड";
+const std::string group1_set_50a = u8"समूह 1 : 50A मोड";
+const std::string group2_set_30a = u8"समूह 2 : 30A मोड";
+const std::string group2_set_50a = u8"समूह 2 : 50A मोड";
+const std::string group3_set_30a = u8"समूह 3 : 30A मोड";
+const std::string group3_set_50a = u8"समूह 3 : 50A मोड";
+const std::string ct_mode_label_text = u8"30A मोड";
+const std::string wifi_toggle_off = u8"बंद";
+const std::string wifi_toggle_on  = u8"चालू";
+const std::string wifi_status = u8"WiFi स्थिति";
+const std::string wifi_connect = u8"जुड़ा हुआ";
+const std::string wifi_connect_fail = u8"कनेक्शन विफल";
+const std::string wifi_not_start= u8"प्रारंभ नहीं हुआ";
+std::string wifi_status_text = u8"WiFi प्रारंभ";
+#else
+#error "Please select a language!"
 #endif
+
 
 uint8_t control_board_buffer[CONTROL_BOARD_BUFFER_SIZE];  // 用來儲存從 UART 讀取的資料
 size_t control_board_buffer_len = 0;  // 當前緩衝區的資料長度
@@ -94,6 +149,14 @@ const char* WIFI_UART2_PATH = "/dev/ttyS3";
 const char* CONTROL_UART2_PATH = "/dev/ttyS2";
 const std::string sd_device = "/dev/mmcblk0p1";
 const std::string mount_point = "/mnt/sd";
+
+int g_wifi_uart1_fd = -1;
+int g_wifi_uart2_fd = -1;
+int g_control_uart_fd = -1;
+int g_adc_fd = -1;
+int g_buzzer_fd = -1;
+int g_wifi_fd = -1;
+
 int BUZZER_GPIO = 76;
 int WIFI_RESET_GPIO = 86;
 int CONNTEC_GPIO = 95;
@@ -395,6 +458,7 @@ public:
 private:
     egt::detail::KMSOverlay* m_overlay;
 };
+
 class Config {
 public:
     bool load(const std::string& filename) {

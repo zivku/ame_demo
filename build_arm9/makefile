@@ -5,7 +5,7 @@ EGT_CXXFLAGS   := $(shell $(SDK)/bin/pkg-config libegt --cflags)
 EGT_LDFLAGS    := $(shell $(SDK)/bin/pkg-config libegt --libs)
 #JPEG_CXXFLAGS   := $(shell $(SDK)/bin/pkg-config libjpeg --cflags)
 #JPEG_LDFLAGS    := $(shell $(SDK)/bin/pkg-config libjpeg --libs)
-LIBS           := -lplanes -ljpeg
+LIBS           := -lplanes
 
 SRC            := $(SRC_DIR)/*
 TARGET         := koli
